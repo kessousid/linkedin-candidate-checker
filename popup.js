@@ -1,5 +1,6 @@
 let activeTabId = null;
 let scrapedLinkedinUrl = null;
+let scrapedTitle = null;
 
 function el(id) {
   return document.getElementById(id);
@@ -84,6 +85,7 @@ async function init() {
     el('fullName').value = scraped.fullName || '';
     el('company').value = scraped.company || '';
     scrapedLinkedinUrl = scraped.linkedinUrl;
+    scrapedTitle = scraped.title;
   }
 }
 
@@ -141,6 +143,7 @@ el('uploadBtn').addEventListener('click', async () => {
     payload: {
       fullName: el('fullName').value.trim(),
       company: el('company').value.trim(),
+      title: scrapedTitle,
       linkedinUrl: scrapedLinkedinUrl,
       pdfDataUrl,
       pdfFilename: file.name,
