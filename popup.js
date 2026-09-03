@@ -142,32 +142,54 @@ async function uploadPdf(pdfDataUrl, pdfFilename) {
 el('downloadPdfBtn').addEventListener('click', async () => {
   el('downloadPdfBtn').disabled = true;
   el('manualFallback').style.display = 'none';
-  el('downloadHint').textContent = 'Downloading PDF from LinkedIn…';
+  el('downloadHint').textContent = 'Downloading PDF from LinkedIn and uploading — this can take a few seconds. Safe to close this popup; it keeps running in the background.';
   await ensureContentScript(activeTabId);
 
+  // The whole download+upload sequence runs in the background service
+  // worker (see background.js), not here -- Chrome closes this popup the
+  // instant its own download notification steals focus, which happens
+  // almost immediately, so nothing after that point in *this* file is
+  // guaranteed to run. sendMessage below may never resolve if that
+  // happens; that's fine, the upload itself doesn't depend on it.
   const result = await chrome.runtime.sendMessage({
-    type: 'DOWNLOAD_AND_READ_PDF',
-    payload: { tabId: activeTabId },
-  });
+    type: 'DOWNLOAD_AND_UPLOAD_CANDIDATE',
+    payload: {
+      tabId: activeTabId,
+      fullName: el('fullName').value.trim(),
+      company: el('company').value.trim(),
+      title: scrapedTitle,
+      linkedinUrl: scrapedLinkedinUrl,
+    },
+  }).catch(() => null);
   el('downloadPdfBtn').disabled = false;
 
-  if (result.ok) {
-    el('downloadHint').textContent = `Downloaded ${result.filename} — uploading…`;
-    await uploadPdf(result.dataUrl, result.filename);
+  if (result && result.ok) {
+    el('downloadHint').textContent = '';
+    const uploadStatus = el('uploadStatus');
+    uploadStatus.style.display = 'block';
+    uploadStatus.className = 'status found';
+    uploadStatus.textContent = '✅ Added to Curatal.';
     return;
   }
 
-  // Automatic read failed -- most commonly because "Allow access to file
-  // URLs" isn't enabled for this extension yet (chrome://extensions ->
-  // this extension -> Details). The PDF still downloaded successfully in
-  // every one of these cases; only reading it back automatically failed.
-  // Fall back to letting the user point at the file directly.
-  const reason = {
+  if (result && result.error === 'already_exists') {
+    el('downloadHint').textContent = 'This profile is already in Curatal.';
+    return;
+  }
+
+  // Either the popup closed before the response came back (result is
+  // null -- the upload may still have gone through; re-open the popup and
+  // click Check Curatal to find out) or the automatic read genuinely
+  // failed, most commonly because "Allow access to file URLs" isn't
+  // enabled for this extension yet. The PDF itself downloads successfully
+  // either way -- only reading it back automatically failed. Fall back to
+  // letting the user point at the file directly.
+  const reason = result ? ({
     trigger_failed: "Couldn't find LinkedIn's Save to PDF option. You can still save it manually via the profile's Resources menu.",
     download_not_detected: "Downloaded, but couldn't detect the file automatically.",
     download_incomplete: 'The download didn’t finish.',
     file_read_failed: 'Downloaded, but couldn’t read the file automatically — enable "Allow access to file URLs" for this extension in chrome://extensions to fix this for next time.',
-  }[result.error] || `Something went wrong (${result.error}).`;
+  }[result.error] || `Upload failed (${result.error}).`) : 'Lost track of that after the popup closed — check Downloads for the PDF, then use the picker below, or click Check Curatal to see if it went through anyway.';
   el('downloadHint').textContent = `${reason} Select the file below to continue.`;
   el('manualFallback').style.display = 'block';
 });

@@ -157,6 +157,36 @@ async function downloadAndReadPdf(tabId) {
   }
 }
 
+// Runs the whole "download the PDF, then upload the candidate" sequence in
+// one call, entirely inside this service worker. This is deliberate, not
+// just convenient: a download takes several seconds, and Chrome closes the
+// popup the instant it loses focus -- which happens the moment its own
+// download notification bubble appears over the toolbar. Splitting this
+// across two round trips (popup awaits the download, *then* separately
+// calls upload) meant the popup routinely got killed by that focus loss
+// before it ever reached the upload call, silently dropping the candidate
+// on the floor even though the download itself succeeded every time.
+// Keeping both steps in one background-owned async function means the
+// upload still happens even if the popup that kicked it off is long gone.
+async function downloadAndUploadCandidate({ tabId, fullName, company, title, linkedinUrl }) {
+  const downloadResult = await downloadAndReadPdf(tabId);
+  if (!downloadResult.ok) {
+    return downloadResult;
+  }
+  const uploadResult = await uploadCandidate({
+    fullName,
+    company,
+    title,
+    linkedinUrl,
+    pdfDataUrl: downloadResult.dataUrl,
+    pdfFilename: downloadResult.filename,
+  });
+  if (uploadResult.error) {
+    return uploadResult;
+  }
+  return { ok: true, filename: downloadResult.filename, ...uploadResult };
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'CHECK_CANDIDATE') {
     checkCandidate(message.payload).then(sendResponse);
@@ -166,8 +196,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     uploadCandidate(message.payload).then(sendResponse);
     return true;
   }
-  if (message.type === 'DOWNLOAD_AND_READ_PDF') {
-    downloadAndReadPdf(message.payload.tabId).then(sendResponse);
+  if (message.type === 'DOWNLOAD_AND_UPLOAD_CANDIDATE') {
+    downloadAndUploadCandidate(message.payload).then(sendResponse);
     return true;
   }
   return false;
