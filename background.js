@@ -51,27 +51,34 @@ async function uploadCandidate({ fullName, company, title, linkedinUrl, pdfDataU
   return body;
 }
 
-// Converts a downloaded file's bytes into a data URL without FileReader --
-// FileReader is a Window API and isn't reliably available in an MV3 service
-// worker; Blob.arrayBuffer() + btoa() is. Chunked to avoid blowing the call
-// stack on String.fromCharCode.apply for a multi-hundred-KB PDF.
-async function blobToDataUrl(blob) {
-  const buf = await blob.arrayBuffer();
-  const bytes = new Uint8Array(buf);
-  let binary = '';
-  const chunkSize = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
-  }
-  return `data:${blob.type || 'application/pdf'};base64,${btoa(binary)}`;
-}
-
 // chrome.downloads gives back a native OS path (e.g.
 // "C:\Users\name\Downloads\file.pdf" on Windows), not a URL.
 function nativePathToFileUrl(nativePath) {
   const normalized = nativePath.replace(/\\/g, '/');
   const withLeadingSlash = normalized.startsWith('/') ? normalized : `/${normalized}`;
   return `file://${encodeURI(withLeadingSlash)}`;
+}
+
+// MV3 service workers cannot fetch() file:// URLs at all -- confirmed live
+// (Chrome logged the error straight out of this file, on the fetch(file://)
+// line, with "Allow access to file URLs" already enabled). This is a hard
+// platform restriction, not a permissions problem. An offscreen document is
+// a real page context (like a hidden tab) and can fetch file:// URLs, so
+// the actual read happens over there (offscreen.js) instead. Only one
+// offscreen document is allowed at a time, hence the hasDocument() check.
+async function ensureOffscreenDocument() {
+  const has = await chrome.offscreen.hasDocument();
+  if (has) return;
+  await chrome.offscreen.createDocument({
+    url: 'offscreen.html',
+    reasons: ['BLOBS'],
+    justification: 'Read a locally downloaded PDF file (file:// URL) to attach it to a candidate upload.',
+  });
+}
+
+async function readFileUrl(fileUrl) {
+  await ensureOffscreenDocument();
+  return chrome.runtime.sendMessage({ type: 'READ_FILE_URL', url: fileUrl });
 }
 
 // Triggers LinkedIn's own Save-to-PDF (via the content script's real click
@@ -144,13 +151,13 @@ async function downloadAndReadPdf(tabId) {
   }
 
   try {
-    const res = await fetch(nativePathToFileUrl(item.filename));
-    if (!res.ok) throw new Error(`fetch ${res.status}`);
-    const blob = await res.blob();
-    const dataUrl = await blobToDataUrl(blob);
-    return { ok: true, dataUrl, filename: item.filename.split(/[\\/]/).pop() };
+    const readResult = await readFileUrl(nativePathToFileUrl(item.filename));
+    if (!readResult || !readResult.ok) {
+      throw new Error((readResult && readResult.error) || 'no response from offscreen document');
+    }
+    return { ok: true, dataUrl: readResult.dataUrl, filename: item.filename.split(/[\\/]/).pop() };
   } catch (err) {
-    // The overwhelmingly common cause: "Allow access to file URLs" isn't
+    // The most common underlying cause: "Allow access to file URLs" isn't
     // enabled for this extension yet. The file did download successfully
     // (chrome://downloads has it) -- this is purely a read-it-back failure.
     return { error: 'file_read_failed', message: String(err) };
