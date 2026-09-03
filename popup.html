@@ -93,12 +93,14 @@
     <div id="statusBox"></div>
 
     <div id="addSection">
-      <button id="downloadPdfBtn" class="secondary">1. Download LinkedIn PDF</button>
+      <button id="downloadPdfBtn" class="secondary">Download &amp; add to Curatal</button>
       <div class="hint" id="downloadHint"></div>
-      <label>2. Select the downloaded PDF
-        <input type="file" id="pdfFile" accept="application/pdf" />
-      </label>
-      <button id="uploadBtn" disabled>3. Upload to Curatal</button>
+      <div id="manualFallback" style="display:none">
+        <label>Select the downloaded PDF
+          <input type="file" id="pdfFile" accept="application/pdf" />
+        </label>
+        <button id="uploadBtn" disabled>Upload to Curatal</button>
+      </div>
       <div id="uploadStatus" class="status" style="display:none"></div>
     </div>
   </div>

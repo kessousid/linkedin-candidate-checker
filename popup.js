@@ -106,37 +106,14 @@ el('checkBtn').addEventListener('click', async () => {
   }
 });
 
-el('downloadPdfBtn').addEventListener('click', async () => {
-  el('downloadHint').textContent = 'Triggering LinkedIn’s Save to PDF…';
-  await ensureContentScript(activeTabId);
-  const result = await chrome.tabs.sendMessage(activeTabId, { type: 'TRIGGER_SAVE_TO_PDF' });
-  if (result.ok) {
-    el('downloadHint').textContent = 'Downloading… once it lands in your Downloads folder, select it below.';
-  } else {
-    el('downloadHint').textContent = `Couldn't find LinkedIn's Save to PDF option (${result.step}). You can still save it manually via the profile's Resources menu, then select it below.`;
-  }
-});
-
-el('pdfFile').addEventListener('change', () => {
-  el('uploadBtn').disabled = !el('pdfFile').files.length;
-});
-
-el('uploadBtn').addEventListener('click', async () => {
-  const file = el('pdfFile').files[0];
-  if (!file) return;
-
-  el('uploadBtn').disabled = true;
+// Shared by both the automatic (file read by the background service
+// worker) and manual (file picker, used as a fallback) paths -- one place
+// that actually calls the upload API so they can't drift apart.
+async function uploadPdf(pdfDataUrl, pdfFilename) {
   const uploadStatus = el('uploadStatus');
   uploadStatus.style.display = 'block';
   uploadStatus.className = 'status not_found';
   uploadStatus.textContent = 'Uploading…';
-
-  const pdfDataUrl = await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
 
   const result = await chrome.runtime.sendMessage({
     type: 'UPLOAD_CANDIDATE',
@@ -146,7 +123,7 @@ el('uploadBtn').addEventListener('click', async () => {
       title: scrapedTitle,
       linkedinUrl: scrapedLinkedinUrl,
       pdfDataUrl,
-      pdfFilename: file.name,
+      pdfFilename,
     },
   });
 
@@ -155,11 +132,64 @@ el('uploadBtn').addEventListener('click', async () => {
     uploadStatus.textContent = result.error === 'already_exists'
       ? 'This profile is already in Curatal.'
       : `Upload failed: ${result.error}`;
-    el('uploadBtn').disabled = false;
   } else {
     uploadStatus.className = 'status found';
     uploadStatus.textContent = '✅ Added to Curatal.';
+    el('manualFallback').style.display = 'none';
   }
+}
+
+el('downloadPdfBtn').addEventListener('click', async () => {
+  el('downloadPdfBtn').disabled = true;
+  el('manualFallback').style.display = 'none';
+  el('downloadHint').textContent = 'Downloading PDF from LinkedIn…';
+  await ensureContentScript(activeTabId);
+
+  const result = await chrome.runtime.sendMessage({
+    type: 'DOWNLOAD_AND_READ_PDF',
+    payload: { tabId: activeTabId },
+  });
+  el('downloadPdfBtn').disabled = false;
+
+  if (result.ok) {
+    el('downloadHint').textContent = `Downloaded ${result.filename} — uploading…`;
+    await uploadPdf(result.dataUrl, result.filename);
+    return;
+  }
+
+  // Automatic read failed -- most commonly because "Allow access to file
+  // URLs" isn't enabled for this extension yet (chrome://extensions ->
+  // this extension -> Details). The PDF still downloaded successfully in
+  // every one of these cases; only reading it back automatically failed.
+  // Fall back to letting the user point at the file directly.
+  const reason = {
+    trigger_failed: "Couldn't find LinkedIn's Save to PDF option. You can still save it manually via the profile's Resources menu.",
+    download_not_detected: "Downloaded, but couldn't detect the file automatically.",
+    download_incomplete: 'The download didn’t finish.',
+    file_read_failed: 'Downloaded, but couldn’t read the file automatically — enable "Allow access to file URLs" for this extension in chrome://extensions to fix this for next time.',
+  }[result.error] || `Something went wrong (${result.error}).`;
+  el('downloadHint').textContent = `${reason} Select the file below to continue.`;
+  el('manualFallback').style.display = 'block';
+});
+
+el('pdfFile').addEventListener('change', () => {
+  el('uploadBtn').disabled = !el('pdfFile').files.length;
+});
+
+el('uploadBtn').addEventListener('click', async () => {
+  const file = el('pdfFile').files[0];
+  if (!file) return;
+  el('uploadBtn').disabled = true;
+
+  const pdfDataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+
+  await uploadPdf(pdfDataUrl, file.name);
+  el('uploadBtn').disabled = false;
 });
 
 init();
