@@ -1,0 +1,108 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Curatal Candidate Checker</title>
+<style>
+  body {
+    width: 320px;
+    font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+    font-size: 13px;
+    color: #1a1a1a;
+    margin: 0;
+    padding: 12px;
+  }
+  h1 {
+    font-size: 14px;
+    margin: 0 0 10px;
+  }
+  label {
+    display: block;
+    font-size: 11px;
+    color: #555;
+    margin-top: 8px;
+  }
+  input[type="text"], input[type="file"] {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 5px 6px;
+    font-size: 13px;
+    margin-top: 2px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+  }
+  button {
+    margin-top: 10px;
+    width: 100%;
+    padding: 7px;
+    border: none;
+    border-radius: 4px;
+    background: #1b4b8c;
+    color: white;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  button:disabled {
+    background: #a9b7c9;
+    cursor: default;
+  }
+  button.secondary {
+    background: #eef1f6;
+    color: #1b4b8c;
+  }
+  .status {
+    margin-top: 10px;
+    padding: 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+  .status.found { background: #e6f4ea; color: #1e7a34; }
+  .status.review { background: #fff6e0; color: #8a6100; }
+  .status.not_found { background: #f1f3f5; color: #444; }
+  .status.error { background: #fdecea; color: #b3261e; }
+  .match-item {
+    padding: 6px 0;
+    border-top: 1px solid rgba(0,0,0,0.08);
+  }
+  .match-item:first-child { border-top: none; }
+  .hint { color: #777; font-size: 11px; margin-top: 4px; }
+  #addSection { display: none; margin-top: 10px; padding-top: 10px; border-top: 1px solid #eee; }
+</style>
+</head>
+<body>
+  <h1>Curatal Candidate Checker</h1>
+
+  <div id="notLinkedIn" class="status error" style="display:none">
+    Open a LinkedIn profile page (linkedin.com/in/...) to use this.
+  </div>
+
+  <div id="notConfigured" class="status error" style="display:none">
+    Backend not configured yet. <a href="#" id="openOptions">Set the API URL and key</a>.
+  </div>
+
+  <div id="mainForm" style="display:none">
+    <label>Name
+      <input type="text" id="fullName" />
+    </label>
+    <label>Current employer
+      <input type="text" id="company" />
+    </label>
+    <button id="checkBtn">Check Curatal</button>
+
+    <div id="statusBox"></div>
+
+    <div id="addSection">
+      <button id="downloadPdfBtn" class="secondary">1. Download LinkedIn PDF</button>
+      <div class="hint" id="downloadHint"></div>
+      <label>2. Select the downloaded PDF
+        <input type="file" id="pdfFile" accept="application/pdf" />
+      </label>
+      <button id="uploadBtn" disabled>3. Upload to Curatal</button>
+      <div id="uploadStatus" class="status" style="display:none"></div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

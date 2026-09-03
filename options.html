@@ -1,0 +1,54 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Curatal Candidate Checker — Settings</title>
+<style>
+  body {
+    font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+    font-size: 14px;
+    max-width: 480px;
+    margin: 40px auto;
+    color: #1a1a1a;
+  }
+  h1 { font-size: 18px; }
+  label { display: block; margin-top: 14px; font-size: 12px; color: #555; }
+  input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px;
+    font-size: 14px;
+    margin-top: 4px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+  }
+  button {
+    margin-top: 18px;
+    padding: 8px 16px;
+    border: none;
+    border-radius: 4px;
+    background: #1b4b8c;
+    color: white;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  #status { margin-top: 12px; font-size: 13px; }
+</style>
+</head>
+<body>
+  <h1>Curatal Candidate Checker — Settings</h1>
+  <p>Backend is the <code>CandidateSearch</code> app (Postgres + Elasticsearch on Railway). The API key must match that service's <code>EXTENSION_API_KEY</code> environment variable.</p>
+
+  <label>Backend API base URL
+    <input type="text" id="apiBase" placeholder="https://your-app.up.railway.app" />
+  </label>
+  <label>API key
+    <input type="text" id="apiKey" placeholder="x-api-key value" />
+  </label>
+
+  <button id="saveBtn">Save</button>
+  <div id="status"></div>
+
+  <script src="options.js"></script>
+</body>
+</html>
