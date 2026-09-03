@@ -6,8 +6,7 @@
 // fire a real page load -- Chrome only auto-injects declarative
 // content_scripts on real navigations, so the declarative injection above
 // silently never happens for that case. The guard below makes re-injection
-// safe (skips re-adding the message listener) instead of doubling up and,
-// e.g., double-triggering the Save-to-PDF click.
+// safe (skips re-adding the message listener) instead of doubling up.
 if (!window.__curatalContentScriptLoaded) {
   window.__curatalContentScriptLoaded = true;
   initCuratalContentScript();
@@ -77,42 +76,10 @@ function scrapeProfile() {
   };
 }
 
-// Dispatches the exact click sequence a person uses for LinkedIn's own
-// "Resources -> Save to PDF" feature -- real DOM click events on real menu
-// items, not a call into LinkedIn's internal export API. Returns which step
-// (if any) failed, so the popup can surface a clear "LinkedIn's page layout
-// changed" error instead of a silent no-op.
-async function triggerSaveToPdf() {
-  const resourcesButton = Array.from(document.querySelectorAll('button'))
-    .find((btn) => /resources/i.test(textOf(btn) || ''));
-  if (!resourcesButton) {
-    return { ok: false, step: 'resources_button_not_found' };
-  }
-  resourcesButton.click();
-
-  // The dropdown renders asynchronously.
-  await new Promise((resolve) => setTimeout(resolve, 400));
-
-  // Verified live: the menu item is a <div role="menuitem">, not an <a> or
-  // <button> -- included alongside those in case LinkedIn's markup varies.
-  const saveToPdfItem = Array.from(document.querySelectorAll('a, button, div[role="button"], [role="menuitem"]'))
-    .find((el) => /save to pdf/i.test(textOf(el) || ''));
-  if (!saveToPdfItem) {
-    return { ok: false, step: 'save_to_pdf_item_not_found' };
-  }
-  saveToPdfItem.click();
-
-  return { ok: true };
-}
-
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'SCRAPE_PROFILE') {
     sendResponse(scrapeProfile());
     return false;
-  }
-  if (message.type === 'TRIGGER_SAVE_TO_PDF') {
-    triggerSaveToPdf().then(sendResponse);
-    return true; // async response
   }
   return false;
 });

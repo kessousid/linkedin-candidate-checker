@@ -27,6 +27,7 @@ async function ensureContentScript(tabId) {
 function renderStatus(status, body) {
   const box = el('statusBox');
   el('addSection').style.display = 'none';
+  el('uploadStatus').style.display = 'none';
 
   if (status === 'error') {
     box.innerHTML = `<div class="status error">Couldn't reach Curatal: ${body.error}</div>`;
@@ -45,13 +46,11 @@ function renderStatus(status, body) {
     }).join('');
     box.innerHTML = `<div class="status review">⚠ Possible matches found — review before adding:${items}</div>`;
     el('addSection').style.display = 'block';
-    el('downloadHint').textContent = 'None of these? Add this profile as a new candidate below.';
     return;
   }
   // not_found
   box.innerHTML = `<div class="status not_found">Not found on Curatal.</div>`;
   el('addSection').style.display = 'block';
-  el('downloadHint').textContent = '';
 }
 
 async function init() {
@@ -106,26 +105,43 @@ el('checkBtn').addEventListener('click', async () => {
   }
 });
 
-// Shared by both the automatic (file read by the background service
-// worker) and manual (file picker, used as a fallback) paths -- one place
-// that actually calls the upload API so they can't drift apart.
-async function uploadPdf(pdfDataUrl, pdfFilename) {
+// No download, no file picker, no local disk involved at all: builds a
+// small PDF summary from the scraped profile data entirely in memory
+// (pdf-builder.js) and uploads it directly. This is deliberately not a
+// copy of LinkedIn's own PDF export -- that path (trigger their Save to
+// PDF, wait for the download, read it back) turned out fragile in
+// practice: the download notification steals the popup's focus and closes
+// it mid-flow, and MV3 service workers can't even fetch() a file:// URL to
+// read the result back. Synchronous in-memory generation has none of
+// that -- it can't fail partway through.
+el('addBtn').addEventListener('click', async () => {
+  el('addBtn').disabled = true;
   const uploadStatus = el('uploadStatus');
   uploadStatus.style.display = 'block';
   uploadStatus.className = 'status not_found';
   uploadStatus.textContent = 'Uploading…';
 
+  const fullName = el('fullName').value.trim();
+  const company = el('company').value.trim();
+  const pdfDataUrl = buildProfileSummaryPdf({
+    fullName,
+    title: scrapedTitle,
+    company,
+    linkedinUrl: scrapedLinkedinUrl,
+  });
+
   const result = await chrome.runtime.sendMessage({
     type: 'UPLOAD_CANDIDATE',
     payload: {
-      fullName: el('fullName').value.trim(),
-      company: el('company').value.trim(),
+      fullName,
+      company,
       title: scrapedTitle,
       linkedinUrl: scrapedLinkedinUrl,
       pdfDataUrl,
-      pdfFilename,
+      pdfFilename: `${fullName || 'candidate'}.pdf`,
     },
   });
+  el('addBtn').disabled = false;
 
   if (result.error) {
     uploadStatus.className = 'status error';
@@ -135,83 +151,7 @@ async function uploadPdf(pdfDataUrl, pdfFilename) {
   } else {
     uploadStatus.className = 'status found';
     uploadStatus.textContent = '✅ Added to Curatal.';
-    el('manualFallback').style.display = 'none';
   }
-}
-
-el('downloadPdfBtn').addEventListener('click', async () => {
-  el('downloadPdfBtn').disabled = true;
-  el('manualFallback').style.display = 'none';
-  el('downloadHint').textContent = 'Downloading PDF from LinkedIn and uploading — this can take a few seconds. Safe to close this popup; it keeps running in the background.';
-  await ensureContentScript(activeTabId);
-
-  // The whole download+upload sequence runs in the background service
-  // worker (see background.js), not here -- Chrome closes this popup the
-  // instant its own download notification steals focus, which happens
-  // almost immediately, so nothing after that point in *this* file is
-  // guaranteed to run. sendMessage below may never resolve if that
-  // happens; that's fine, the upload itself doesn't depend on it.
-  const result = await chrome.runtime.sendMessage({
-    type: 'DOWNLOAD_AND_UPLOAD_CANDIDATE',
-    payload: {
-      tabId: activeTabId,
-      fullName: el('fullName').value.trim(),
-      company: el('company').value.trim(),
-      title: scrapedTitle,
-      linkedinUrl: scrapedLinkedinUrl,
-    },
-  }).catch(() => null);
-  el('downloadPdfBtn').disabled = false;
-
-  if (result && result.ok) {
-    el('downloadHint').textContent = '';
-    const uploadStatus = el('uploadStatus');
-    uploadStatus.style.display = 'block';
-    uploadStatus.className = 'status found';
-    uploadStatus.textContent = '✅ Added to Curatal.';
-    return;
-  }
-
-  if (result && result.error === 'already_exists') {
-    el('downloadHint').textContent = 'This profile is already in Curatal.';
-    return;
-  }
-
-  // Either the popup closed before the response came back (result is
-  // null -- the upload may still have gone through; re-open the popup and
-  // click Check Curatal to find out) or the automatic read genuinely
-  // failed, most commonly because "Allow access to file URLs" isn't
-  // enabled for this extension yet. The PDF itself downloads successfully
-  // either way -- only reading it back automatically failed. Fall back to
-  // letting the user point at the file directly.
-  const reason = result ? ({
-    trigger_failed: "Couldn't find LinkedIn's Save to PDF option. You can still save it manually via the profile's Resources menu.",
-    download_not_detected: "Downloaded, but couldn't detect the file automatically.",
-    download_incomplete: 'The download didn’t finish.',
-    file_read_failed: 'Downloaded, but couldn’t read the file automatically — enable "Allow access to file URLs" for this extension in chrome://extensions to fix this for next time.',
-  }[result.error] || `Upload failed (${result.error}).`) : 'Lost track of that after the popup closed — check Downloads for the PDF, then use the picker below, or click Check Curatal to see if it went through anyway.';
-  el('downloadHint').textContent = `${reason} Select the file below to continue.`;
-  el('manualFallback').style.display = 'block';
-});
-
-el('pdfFile').addEventListener('change', () => {
-  el('uploadBtn').disabled = !el('pdfFile').files.length;
-});
-
-el('uploadBtn').addEventListener('click', async () => {
-  const file = el('pdfFile').files[0];
-  if (!file) return;
-  el('uploadBtn').disabled = true;
-
-  const pdfDataUrl = await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-
-  await uploadPdf(pdfDataUrl, file.name);
-  el('uploadBtn').disabled = false;
 });
 
 init();

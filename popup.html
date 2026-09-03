@@ -93,18 +93,12 @@
     <div id="statusBox"></div>
 
     <div id="addSection">
-      <button id="downloadPdfBtn" class="secondary">Download &amp; add to Curatal</button>
-      <div class="hint" id="downloadHint"></div>
-      <div id="manualFallback" style="display:none">
-        <label>Select the downloaded PDF
-          <input type="file" id="pdfFile" accept="application/pdf" />
-        </label>
-        <button id="uploadBtn" disabled>Upload to Curatal</button>
-      </div>
+      <button id="addBtn" class="secondary">Add to Curatal</button>
       <div id="uploadStatus" class="status" style="display:none"></div>
     </div>
   </div>
 
+  <script src="pdf-builder.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>
