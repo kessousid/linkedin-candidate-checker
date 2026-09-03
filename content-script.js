@@ -1,5 +1,20 @@
-// Runs on https://www.linkedin.com/in/* (declared in manifest.json).
-//
+// Runs on https://www.linkedin.com/in/* (declared in manifest.json), and is
+// also re-injected on demand by popup.js via chrome.scripting.executeScript
+// before every message it sends. That second path is required, not
+// redundant: LinkedIn is a single-page app, so navigating to a profile from
+// elsewhere in LinkedIn (e.g. clicking your own name from the feed) doesn't
+// fire a real page load -- Chrome only auto-injects declarative
+// content_scripts on real navigations, so the declarative injection above
+// silently never happens for that case. The guard below makes re-injection
+// safe (skips re-adding the message listener) instead of doubling up and,
+// e.g., double-triggering the Save-to-PDF click.
+if (!window.__curatalContentScriptLoaded) {
+  window.__curatalContentScriptLoaded = true;
+  initCuratalContentScript();
+}
+
+function initCuratalContentScript() {
+
 // LinkedIn's DOM is not a stable public API -- class names are largely
 // hashed/generated and shift over time. The selectors below are written to
 // degrade gracefully (multiple fallbacks, never throw) rather than assume
@@ -101,3 +116,5 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   return false;
 });
+
+}

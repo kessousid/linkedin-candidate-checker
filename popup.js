@@ -5,6 +5,24 @@ function el(id) {
   return document.getElementById(id);
 }
 
+// LinkedIn is a single-page app: navigating to a profile from elsewhere in
+// LinkedIn (e.g. clicking your own name from the feed) doesn't fire a real
+// page load, so manifest.json's declarative content_scripts injection --
+// which only fires on real navigations -- silently never runs for that
+// case, leaving the tab with no content script to message. Explicitly
+// (re-)injecting here, right before every message, makes this work
+// regardless of how the user got to the profile page. content-script.js
+// guards against double-injection, so calling this when the script is
+// already present is a safe no-op.
+async function ensureContentScript(tabId) {
+  try {
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['content-script.js'] });
+  } catch {
+    // Injection can fail on pages the extension isn't allowed to touch;
+    // the subsequent sendMessage below will surface that as its own error.
+  }
+}
+
 function renderStatus(status, body) {
   const box = el('statusBox');
   el('addSection').style.display = 'none';
@@ -55,6 +73,7 @@ async function init() {
 
   el('mainForm').style.display = 'block';
 
+  await ensureContentScript(activeTabId);
   let scraped;
   try {
     scraped = await chrome.tabs.sendMessage(activeTabId, { type: 'SCRAPE_PROFILE' });
@@ -87,6 +106,7 @@ el('checkBtn').addEventListener('click', async () => {
 
 el('downloadPdfBtn').addEventListener('click', async () => {
   el('downloadHint').textContent = 'Triggering LinkedIn’s Save to PDF…';
+  await ensureContentScript(activeTabId);
   const result = await chrome.tabs.sendMessage(activeTabId, { type: 'TRIGGER_SAVE_TO_PDF' });
   if (result.ok) {
     el('downloadHint').textContent = 'Downloading… once it lands in your Downloads folder, select it below.';
