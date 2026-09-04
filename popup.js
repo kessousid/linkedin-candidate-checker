@@ -91,6 +91,11 @@ async function init() {
   }
 }
 
+el('viewAllLink').addEventListener('click', (e) => {
+  e.preventDefault();
+  chrome.tabs.create({ url: chrome.runtime.getURL('browse.html') });
+});
+
 el('searchSkillBtn').addEventListener('click', () => {
   const skill = el('skillInput').value.trim();
   if (!skill) return;
