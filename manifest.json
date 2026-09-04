@@ -28,6 +28,11 @@
       "matches": ["https://www.linkedin.com/in/*"],
       "js": ["content-script.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.linkedin.com/search/results/people/*"],
+      "js": ["pdf-builder.js", "search-content-script.js"],
+      "run_at": "document_idle"
     }
   ]
 }

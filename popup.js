@@ -54,13 +54,6 @@ function renderStatus(status, body) {
 }
 
 async function init() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || !/^https:\/\/www\.linkedin\.com\/in\//.test(tab.url || '')) {
-    el('notLinkedIn').style.display = 'block';
-    return;
-  }
-  activeTabId = tab.id;
-
   const { apiBase, apiKey } = await chrome.storage.sync.get(['apiBase', 'apiKey']);
   if (!apiBase || !apiKey) {
     el('notConfigured').style.display = 'block';
@@ -70,7 +63,17 @@ async function init() {
     });
     return;
   }
+  el('configuredSections').style.display = 'block';
 
+  // The skill-search box (below) works regardless of what page is open --
+  // only the single-profile check/add section needs an actual profile
+  // page open to scrape.
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab || !/^https:\/\/www\.linkedin\.com\/in\//.test(tab.url || '')) {
+    el('notLinkedIn').style.display = 'block';
+    return;
+  }
+  activeTabId = tab.id;
   el('mainForm').style.display = 'block';
 
   await ensureContentScript(activeTabId);
@@ -87,6 +90,13 @@ async function init() {
     scrapedTitle = scraped.title;
   }
 }
+
+el('searchSkillBtn').addEventListener('click', () => {
+  const skill = el('skillInput').value.trim();
+  if (!skill) return;
+  const url = `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(skill)}`;
+  chrome.tabs.create({ url });
+});
 
 el('checkBtn').addEventListener('click', async () => {
   const name = el('fullName').value.trim();

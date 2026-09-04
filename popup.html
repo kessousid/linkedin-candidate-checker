@@ -73,28 +73,38 @@
 <body>
   <h1>Curatal Candidate Checker</h1>
 
-  <div id="notLinkedIn" class="status error" style="display:none">
-    Open a LinkedIn profile page (linkedin.com/in/...) to use this.
-  </div>
-
   <div id="notConfigured" class="status error" style="display:none">
     Backend not configured yet. <a href="#" id="openOptions">Set the API URL and key</a>.
   </div>
 
-  <div id="mainForm" style="display:none">
-    <label>Name
-      <input type="text" id="fullName" />
-    </label>
-    <label>Current employer
-      <input type="text" id="company" />
-    </label>
-    <button id="checkBtn">Check Curatal</button>
+  <div id="configuredSections" style="display:none">
+    <div id="skillSection">
+      <label>Skill
+        <input type="text" id="skillInput" placeholder="e.g. Java, Kubernetes" />
+      </label>
+      <button id="searchSkillBtn" class="secondary">Search LinkedIn for this skill</button>
+      <div class="hint">Opens LinkedIn's People search for that skill in a new tab. Each result there gets a "Check Curatal" button, plus a "Check &amp; add all visible" button at the top — nothing runs automatically or visits extra pages.</div>
+    </div>
 
-    <div id="statusBox"></div>
+    <div id="notLinkedIn" class="hint" style="display:none; margin-top:14px; padding-top:14px; border-top:1px solid #eee;">
+      Open a LinkedIn profile page (linkedin.com/in/...) to check/add that specific candidate here too.
+    </div>
 
-    <div id="addSection">
-      <button id="addBtn" class="secondary">Add to Curatal</button>
-      <div id="uploadStatus" class="status" style="display:none"></div>
+    <div id="mainForm" style="display:none; margin-top:14px; padding-top:14px; border-top:1px solid #eee;">
+      <label>Name
+        <input type="text" id="fullName" />
+      </label>
+      <label>Current employer
+        <input type="text" id="company" />
+      </label>
+      <button id="checkBtn">Check Curatal</button>
+
+      <div id="statusBox"></div>
+
+      <div id="addSection">
+        <button id="addBtn" class="secondary">Add to Curatal</button>
+        <div id="uploadStatus" class="status" style="display:none"></div>
+      </div>
     </div>
   </div>
 
