@@ -66,52 +66,48 @@ function setStatus(statusEl, text, kind) {
   statusEl.style.color = { found: '#1e7a34', added: '#1e7a34', review: '#8a6100', error: '#b3261e' }[kind] || '#666';
 }
 
-// Checks Curatal for one card and, if missing, uploads it (same in-memory
-// PDF-summary approach as the single-profile popup flow -- see
-// pdf-builder.js, loaded alongside this file per manifest.json). Only ever
-// called from an explicit click (per-card or the "check all visible"
-// batch button), never on page load/scroll.
-async function checkAndAddCard(card, statusEl) {
-  const { title, company } = parseHeadline(card.headline);
+// Checks Curatal for one card by phone/email and, if missing, adds it. Phone
+// (and optionally email) has to come from whatever separate lookup tool the
+// recruiter is using alongside this extension -- LinkedIn's search results
+// never expose either, so there's a small input for it right on the card.
+// Only ever called from an explicit click (per-card or the "check all
+// visible" batch button), never on page load/scroll.
+async function checkAndAddCard(card, statusEl, contactEls) {
+  const { company } = parseHeadline(card.headline);
+  const phone = contactEls.phone.value.trim();
+  const email = contactEls.email.value.trim();
+  if (!phone && !email) {
+    setStatus(statusEl, 'Enter a phone or email first', 'error');
+    return;
+  }
   setStatus(statusEl, 'Checking…', null);
 
   const checkResult = await chrome.runtime.sendMessage({
     type: 'CHECK_CANDIDATE',
-    payload: { name: card.name, company },
+    payload: { phone, email },
   });
   if (checkResult.error) {
     setStatus(statusEl, `Error: ${checkResult.error}`, 'error');
     return;
   }
-  if (checkResult.status === 'found') {
+  if (checkResult.exists) {
     setStatus(statusEl, '✅ Already on Curatal', 'found');
-    return;
-  }
-  if (checkResult.status === 'review') {
-    setStatus(statusEl, '⚠ Possible match — check manually', 'review');
     return;
   }
 
   setStatus(statusEl, 'Adding…', null);
-  const pdfDataUrl = buildProfileSummaryPdf({
-    fullName: card.name,
-    title,
-    company,
-    linkedinUrl: card.linkedinUrl,
-  });
   const uploadResult = await chrome.runtime.sendMessage({
     type: 'UPLOAD_CANDIDATE',
     payload: {
       fullName: card.name,
-      company,
-      title,
+      phone,
+      email,
+      currentCompany: company,
       linkedinUrl: card.linkedinUrl,
-      pdfDataUrl,
-      pdfFilename: `${card.name}.pdf`,
     },
   });
   if (uploadResult.error) {
-    setStatus(statusEl, uploadResult.error === 'already_exists' ? '✅ Already on Curatal' : `Upload failed: ${uploadResult.error}`, uploadResult.error === 'already_exists' ? 'found' : 'error');
+    setStatus(statusEl, uploadResult.error === 'already_exists' ? '✅ Already on Curatal' : `Add failed: ${uploadResult.error}`, uploadResult.error === 'already_exists' ? 'found' : 'error');
     return;
   }
   setStatus(statusEl, '✅ Added to Curatal', 'added');
@@ -124,7 +120,20 @@ function injectCardControls(card) {
 
   const wrap = document.createElement('div');
   wrap.className = CONTROLS_CLASS;
-  wrap.style.cssText = 'margin-top:6px;display:flex;align-items:center;gap:8px;';
+  wrap.style.cssText = 'margin-top:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;';
+
+  // LinkedIn search results never expose phone/email -- these are filled in
+  // manually (from whatever separate lookup tool the recruiter is using)
+  // before checking/adding this card.
+  const phoneInput = document.createElement('input');
+  phoneInput.type = 'text';
+  phoneInput.placeholder = 'Phone';
+  phoneInput.style.cssText = 'width:110px;padding:3px 6px;font-size:12px;border:1px solid #ccc;border-radius:4px;';
+
+  const emailInput = document.createElement('input');
+  emailInput.type = 'text';
+  emailInput.placeholder = 'Email (optional)';
+  emailInput.style.cssText = 'width:150px;padding:3px 6px;font-size:12px;border:1px solid #ccc;border-radius:4px;';
 
   const btn = document.createElement('button');
   btn.type = 'button';
@@ -134,6 +143,8 @@ function injectCardControls(card) {
   const status = document.createElement('span');
   status.style.cssText = 'font-size:12px;color:#666;';
 
+  const contactEls = { phone: phoneInput, email: emailInput };
+
   btn.addEventListener('click', async (e) => {
     // Cards sit inside a full-card overlay <a> (click-anywhere navigates
     // to the profile) -- without this, clicking the button would also
@@ -141,14 +152,19 @@ function injectCardControls(card) {
     e.preventDefault();
     e.stopPropagation();
     btn.disabled = true;
-    await checkAndAddCard(card, status);
+    await checkAndAddCard(card, status, contactEls);
     btn.disabled = false;
   });
+  [phoneInput, emailInput].forEach((input) => {
+    input.addEventListener('click', (e) => e.stopPropagation());
+  });
 
+  wrap.appendChild(phoneInput);
+  wrap.appendChild(emailInput);
   wrap.appendChild(btn);
   wrap.appendChild(status);
   card.li.appendChild(wrap);
-  return { btn, status };
+  return { btn, status, contactEls };
 }
 
 function scanAndInject() {
@@ -189,11 +205,16 @@ function injectBatchBar() {
 
     for (let i = 0; i < cards.length; i += 1) {
       progress.textContent = `Processing ${i + 1} of ${cards.length}…`;
+      const existingWrap = cards[i].li.querySelector(`.${CONTROLS_CLASS}`);
       const controls = injectCardControls(cards[i]) || {
-        status: cards[i].li.querySelector(`.${CONTROLS_CLASS} span`),
+        status: existingWrap.querySelector('span'),
+        contactEls: {
+          phone: existingWrap.querySelectorAll('input')[0],
+          email: existingWrap.querySelectorAll('input')[1],
+        },
       };
       // eslint-disable-next-line no-await-in-loop
-      await checkAndAddCard(cards[i], controls.status);
+      await checkAndAddCard(cards[i], controls.status, controls.contactEls);
       // eslint-disable-next-line no-await-in-loop
       await new Promise((resolve) => setTimeout(resolve, 400));
     }

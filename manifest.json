@@ -21,8 +21,7 @@
     "service_worker": "background.js"
   },
   "permissions": ["storage", "scripting", "activeTab"],
-  "host_permissions": ["https://www.linkedin.com/*"],
-  "optional_host_permissions": ["https://*/*"],
+  "host_permissions": ["https://www.linkedin.com/*", "https://curatal-dev.openturf.dev/*"],
   "content_scripts": [
     {
       "matches": ["https://www.linkedin.com/in/*"],
@@ -31,7 +30,7 @@
     },
     {
       "matches": ["https://www.linkedin.com/search/results/people/*"],
-      "js": ["pdf-builder.js", "search-content-script.js"],
+      "js": ["search-content-script.js"],
       "run_at": "document_idle"
     }
   ]

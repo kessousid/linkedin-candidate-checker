@@ -74,12 +74,10 @@
   <h1>Curatal Candidate Checker</h1>
 
   <div id="notConfigured" class="status error" style="display:none">
-    Backend not configured yet. <a href="#" id="openOptions">Set the API URL and key</a>.
+    Not logged in to Curatal Dev yet. <a href="#" id="openOptions">Log in</a>.
   </div>
 
   <div id="configuredSections" style="display:none">
-    <a href="#" id="viewAllLink" style="display:block; font-size:12px; margin-bottom:10px;">View all candidates added so far →</a>
-
     <div id="skillSection">
       <label>Skill
         <input type="text" id="skillInput" placeholder="e.g. Java, Kubernetes" />
@@ -99,6 +97,12 @@
       <label>Current employer
         <input type="text" id="company" />
       </label>
+      <label>Phone number <span class="hint" style="margin:0">(from your phone/email lookup tool)</span>
+        <input type="text" id="phone" />
+      </label>
+      <label>Email <span class="hint" style="margin:0">(optional)</span>
+        <input type="text" id="email" />
+      </label>
       <button id="checkBtn">Check Curatal</button>
 
       <div id="statusBox"></div>
@@ -110,7 +114,6 @@
     </div>
   </div>
 
-  <script src="pdf-builder.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

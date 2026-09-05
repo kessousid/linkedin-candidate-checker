@@ -1,6 +1,5 @@
 let activeTabId = null;
 let scrapedLinkedinUrl = null;
-let scrapedTitle = null;
 
 function el(id) {
   return document.getElementById(id);
@@ -24,38 +23,26 @@ async function ensureContentScript(tabId) {
   }
 }
 
-function renderStatus(status, body) {
+function renderStatus(result) {
   const box = el('statusBox');
   el('addSection').style.display = 'none';
   el('uploadStatus').style.display = 'none';
 
-  if (status === 'error') {
-    box.innerHTML = `<div class="status error">Couldn't reach Curatal: ${body.error}</div>`;
+  if (result.error) {
+    box.innerHTML = `<div class="status error">Couldn't reach Curatal: ${result.error}</div>`;
     return;
   }
-  if (status === 'found') {
-    const m = body.match;
-    const roles = m.workExperience.map((w) => `${w.title || 'Unknown role'} at ${w.company || 'Unknown'}`).join(', ');
-    box.innerHTML = `<div class="status found">✅ Already on Curatal<br><strong>${m.fullName}</strong>${m.location ? ` — ${m.location}` : ''}${roles ? `<br>${roles}` : ''}</div>`;
+  if (result.exists) {
+    box.innerHTML = `<div class="status found">✅ Already on Curatal<br><strong>${result.fullName || ''}</strong></div>`;
     return;
   }
-  if (status === 'review') {
-    const items = body.possibleMatches.map((m) => {
-      const roles = m.workExperience.map((w) => `${w.title || 'Unknown role'} at ${w.company || 'Unknown'}`).join(', ');
-      return `<div class="match-item"><strong>${m.fullName}</strong>${m.location ? ` — ${m.location}` : ''}${roles ? `<br>${roles}` : ''}</div>`;
-    }).join('');
-    box.innerHTML = `<div class="status review">⚠ Possible matches found — review before adding:${items}</div>`;
-    el('addSection').style.display = 'block';
-    return;
-  }
-  // not_found
-  box.innerHTML = `<div class="status not_found">Not found on Curatal.</div>`;
+  box.innerHTML = `<div class="status not_found">Not found on Curatal (checked by phone/email).</div>`;
   el('addSection').style.display = 'block';
 }
 
 async function init() {
-  const { apiBase, apiKey } = await chrome.storage.sync.get(['apiBase', 'apiKey']);
-  if (!apiBase || !apiKey) {
+  const { loggedIn } = await chrome.runtime.sendMessage({ type: 'GET_LOGIN_STATE' });
+  if (!loggedIn) {
     el('notConfigured').style.display = 'block';
     el('openOptions').addEventListener('click', (e) => {
       e.preventDefault();
@@ -87,14 +74,8 @@ async function init() {
     el('fullName').value = scraped.fullName || '';
     el('company').value = scraped.company || '';
     scrapedLinkedinUrl = scraped.linkedinUrl;
-    scrapedTitle = scraped.title;
   }
 }
-
-el('viewAllLink').addEventListener('click', (e) => {
-  e.preventDefault();
-  chrome.tabs.create({ url: chrome.runtime.getURL('browse.html') });
-});
 
 el('searchSkillBtn').addEventListener('click', () => {
   const skill = el('skillInput').value.trim();
@@ -104,56 +85,40 @@ el('searchSkillBtn').addEventListener('click', () => {
 });
 
 el('checkBtn').addEventListener('click', async () => {
-  const name = el('fullName').value.trim();
-  const company = el('company').value.trim();
-  if (!name) return;
+  const phone = el('phone').value.trim();
+  const email = el('email').value.trim();
+  if (!phone && !email) {
+    el('statusBox').innerHTML = '<div class="status error">Enter a phone number or email to check.</div>';
+    return;
+  }
 
   el('checkBtn').disabled = true;
   el('statusBox').innerHTML = '<div class="status not_found">Checking…</div>';
-  const result = await chrome.runtime.sendMessage({ type: 'CHECK_CANDIDATE', payload: { name, company } });
+  const result = await chrome.runtime.sendMessage({ type: 'CHECK_CANDIDATE', payload: { phone, email } });
   el('checkBtn').disabled = false;
-
-  if (result.error) {
-    renderStatus('error', result);
-  } else {
-    renderStatus(result.status, result);
-  }
+  renderStatus(result);
 });
 
-// No download, no file picker, no local disk involved at all: builds a
-// small PDF summary from the scraped profile data entirely in memory
-// (pdf-builder.js) and uploads it directly. This is deliberately not a
-// copy of LinkedIn's own PDF export -- that path (trigger their Save to
-// PDF, wait for the download, read it back) turned out fragile in
-// practice: the download notification steals the popup's focus and closes
-// it mid-flow, and MV3 service workers can't even fetch() a file:// URL to
-// read the result back. Synchronous in-memory generation has none of
-// that -- it can't fail partway through.
 el('addBtn').addEventListener('click', async () => {
   el('addBtn').disabled = true;
   const uploadStatus = el('uploadStatus');
   uploadStatus.style.display = 'block';
   uploadStatus.className = 'status not_found';
-  uploadStatus.textContent = 'Uploading…';
+  uploadStatus.textContent = 'Adding…';
 
   const fullName = el('fullName').value.trim();
   const company = el('company').value.trim();
-  const pdfDataUrl = buildProfileSummaryPdf({
-    fullName,
-    title: scrapedTitle,
-    company,
-    linkedinUrl: scrapedLinkedinUrl,
-  });
+  const phone = el('phone').value.trim();
+  const email = el('email').value.trim();
 
   const result = await chrome.runtime.sendMessage({
     type: 'UPLOAD_CANDIDATE',
     payload: {
       fullName,
-      company,
-      title: scrapedTitle,
+      phone,
+      email,
+      currentCompany: company,
       linkedinUrl: scrapedLinkedinUrl,
-      pdfDataUrl,
-      pdfFilename: `${fullName || 'candidate'}.pdf`,
     },
   });
   el('addBtn').disabled = false;
@@ -162,7 +127,7 @@ el('addBtn').addEventListener('click', async () => {
     uploadStatus.className = 'status error';
     uploadStatus.textContent = result.error === 'already_exists'
       ? 'This profile is already in Curatal.'
-      : `Upload failed: ${result.error}`;
+      : `Add failed: ${result.error}`;
   } else {
     uploadStatus.className = 'status found';
     uploadStatus.textContent = '✅ Added to Curatal.';
