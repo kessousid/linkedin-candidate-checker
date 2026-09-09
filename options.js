@@ -6,7 +6,7 @@ function renderLoginState({ loggedIn, email }) {
   el('loggedInView').style.display = loggedIn ? 'block' : 'none';
   el('loginForm').style.display = loggedIn ? 'none' : 'block';
   if (loggedIn) {
-    el('loggedInAs').textContent = `Logged in as ${email || 'a Curatal Dev recruiter'}.`;
+    el('loggedInAs').textContent = `Logged in as ${email || 'a Curatal Dev Platform Admin'}.`;
   }
 }
 

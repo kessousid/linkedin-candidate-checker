@@ -2,16 +2,24 @@
 // Keeping tokens here (rather than in popup.js/search-content-script.js)
 // means they never need to be read by anything other than this one place.
 //
-// This talks to the REAL Curatal Dev environment's own accounts service --
+// This talks to the REAL Curatal Dev environment's own backend services --
 // never staging or production, that host isn't configurable anywhere in
-// this extension -- as a signed-in recruiter (Keycloak email+password
+// this extension -- as a signed-in Platform Admin (Keycloak email+password
 // login, the same _login/_refresh-token shape CuratalApp's own client uses
 // for candidates: src/api/client.ts, src/api/environment.ts), not a plain
-// shared API key against a throwaway clone.
+// shared API key against a throwaway clone. Platform Admin specifically
+// (not Recruiter) -- confirmed live against C:\CuratalIT's source, it's
+// the one role accepted by both accounts_service's isrecruiterAuthorized()
+// (LOOKUP/ADD/MISSING_LINKEDIN_PATH below) and pca_service's
+// isPcaAndPlatformAdminAuthorized()/canAccessCandidateProfile()
+// (PCA_*_PATH below, which writes the backfill's resolved LinkedIn URL
+// back onto the candidate's own profile).
 const API_HOST = 'https://curatal-dev.openturf.dev';
 // Login goes through the separate recruiter_service (confirmed live: its
 // validation error names /home/ubuntu/curatal_backend/recruiter_service/...),
-// not the candidate-oriented accounts_service _login this used before.
+// not the candidate-oriented accounts_service _login this used before --
+// recruiter_service's own login only rejects a 'Candidate' role, so a
+// Platform Admin account logs in here too, same endpoint.
 const LOGIN_PATH = '/api/v1/recruiter/login';
 const REFRESH_TOKEN_PATH = '/api/v1/refresh-token';
 // These three are business logic that only exists in accounts_service
@@ -25,6 +33,20 @@ const REFRESH_TOKEN_PATH = '/api/v1/refresh-token';
 const LOOKUP_PATH = '/curatal_account/api/v1/accounts/candidate/sourced/lookup';
 const ADD_PATH = '/curatal_account/api/v1/accounts/candidate/sourced';
 const MISSING_LINKEDIN_PATH = '/curatal_account/api/v1/accounts/candidate/sourced/missing-linkedin';
+
+// Writes the bulk-backfill crawl's resolved LinkedIn URL back onto the
+// candidate's own Curatal profile (Social Media Links section) -- a
+// completely different backend service (pca_service, external gateway
+// prefix /curatal_pca) from the three paths above (accounts_service,
+// /curatal_account). Confirmed live against pca_service's own source
+// (routes/v1/pca.route.js: POST /getProfile/byEmail, PATCH
+// /updateProfile/:candidateId). Both require the logged-in account's JWT
+// to carry a PCA Admin/PCA Agent/Platform Admin realm role -- a plain
+// Recruiter login can't call these. isrecruiterAuthorized() on the three
+// accounts_service paths above accepts Platform Admin too, so logging in
+// as Platform Admin (not Recruiter) covers everything with one login.
+const PCA_GET_PROFILE_BY_EMAIL_PATH = '/curatal_pca/api/v1/pca/getProfile/byEmail';
+const PCA_UPDATE_PROFILE_PATH = '/curatal_pca/api/v1/pca/updateProfile';
 
 const ACCESS_TOKEN_KEY = 'curatal_access_token';
 const REFRESH_TOKEN_KEY = 'curatal_refresh_token';
@@ -172,6 +194,56 @@ async function uploadCandidate({ fullName, phone, email, currentCompany, linkedi
     method: 'POST',
     body: JSON.stringify({ fullName, phone, email, currentCompany, linkedinUrl }),
   });
+}
+
+async function getPcaProfileByEmail(email) {
+  return apiFetch(PCA_GET_PROFILE_BY_EMAIL_PATH, {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  });
+}
+
+// Fetches the candidate's LIVE profile right before writing (not the
+// possibly-stale missing-linkedin snapshot the batch was built from -- a
+// batch can sit around for a while, and someone else could have already
+// filled this in by then) and only PATCHes if linkedin_url is still
+// actually empty, per instruction: never overwrite an existing value.
+// The update endpoint does a raw field-by-field DB write, not a merge
+// (confirmed live in pca_service's profile.service.js -- updateProfileData
+// builds the social-links row straight from whatever's in the request
+// body) -- sending only linkedin_url would blank out github_url/
+// twitter_url/etc. for anyone who already has those set, so the full
+// current profile_information block is resent unchanged apart from
+// linkedin_url, same as CuratalApp's own profile form always does.
+async function attachLinkedinUrlIfMissing(email, linkedinUrl) {
+  if (!email) return { error: 'no_email_on_file' };
+
+  const profileResult = await getPcaProfileByEmail(email);
+  if (profileResult.error) return { error: profileResult.error };
+  const candidateId = profileResult.data?.personal_information?.candidate_id;
+  if (!candidateId) return { error: 'candidate_id_missing' };
+
+  const existing = profileResult.data?.profile_information || {};
+  if (existing.linkedin_url) return { skipped: true, existingUrl: existing.linkedin_url };
+
+  const patchResult = await apiFetch(`${PCA_UPDATE_PROFILE_PATH}/${candidateId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      profile_information: {
+        profile_heading: existing.profile_heading || '',
+        linkedin_url: linkedinUrl,
+        github_url: existing.github_url || '',
+        youtube_url: existing.youtube_url || '',
+        fb_url: existing.fb_url || '',
+        insta_url: existing.insta_url || '',
+        kaggle_url: existing.kaggle_url || '',
+        twitter_url: existing.twitter_url || '',
+        website_url: existing.website_url || '',
+      },
+    }),
+  });
+  if (patchResult.error) return { error: patchResult.error };
+  return { saved: true };
 }
 
 const BULK_CURSOR_KEY = 'bulkBackfillCursor';
@@ -911,20 +983,19 @@ async function processCandidate(tab, candidate) {
     } else {
       const resolution = await resolveNameMatch(nameMatches, candidate, tab);
       if (resolution.resolved) {
-        const lookupResult = await checkCandidate({
-          fullName: candidate.fullName,
-          phone: candidate.phone,
-          linkedinUrl: resolution.profile.linkedinUrl,
-        });
-        if (lookupResult.exists) {
+        const saveResult = await attachLinkedinUrlIfMissing(candidate.email, resolution.profile.linkedinUrl);
+        if (saveResult.saved) {
           candidate.status = 'matched';
-          candidate.detail = `${resolution.profile.linkedinUrl} (via ${resolution.via})`;
+          candidate.detail = `${resolution.profile.linkedinUrl} (via ${resolution.via}, saved to Curatal)`;
+        } else if (saveResult.skipped) {
+          // Candidate already has a LinkedIn URL on file (possibly set
+          // since this batch was fetched) -- never overwrite it, per
+          // instruction. Still a real match, just not written.
+          candidate.status = 'matched';
+          candidate.detail = `${resolution.profile.linkedinUrl} (via ${resolution.via}) -- already has ${saveResult.existingUrl} on file, not overwritten`;
         } else {
-          // Shouldn't normally happen (the batch only contains candidates
-          // we already know are in Curatal), but don't claim success if a
-          // fresh lookup disagrees.
           candidate.status = 'error';
-          candidate.detail = 'lookup no longer matched';
+          candidate.detail = `found ${resolution.profile.linkedinUrl} (via ${resolution.via}) but failed to save: ${saveResult.error}`;
         }
       } else {
         candidate.status = 'no_match';
