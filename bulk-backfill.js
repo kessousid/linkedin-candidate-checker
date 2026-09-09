@@ -78,6 +78,32 @@ el('recheckBtn').addEventListener('click', async () => {
   }
 });
 
+function toCsvValue(value) {
+  return `"${String(value ?? '').replace(/"/g, '""')}"`;
+}
+
+el('downloadReportBtn').addEventListener('click', async () => {
+  const { rows } = await chrome.runtime.sendMessage({ type: 'GET_BULK_REPORT' });
+  if (!rows || !rows.length) {
+    el('progressText').textContent = 'Nothing to download yet -- no candidates processed since the last reset.';
+    return;
+  }
+  const header = ['Full Name', 'Phone', 'Email', 'Current Company', 'Status', 'Detail'];
+  const lines = [header.map(toCsvValue).join(',')];
+  rows.forEach((r) => {
+    lines.push([r.fullName, r.phone, r.email, r.currentCompany, r.status, r.detail].map(toCsvValue).join(','));
+  });
+  const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `curatal-linkedin-backfill-report-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+});
+
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'BULK_BACKFILL_PROGRESS') {
     renderState(message.payload);

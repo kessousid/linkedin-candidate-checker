@@ -56,10 +56,13 @@
     <button id="stopBtn" class="secondary" disabled>Stop</button>
     <button id="resetCursorBtn" class="secondary">Reset to first batch</button>
     <button id="recheckBtn" class="secondary" disabled>Recheck no-matches</button>
+    <button id="downloadReportBtn" class="secondary">Download report (CSV)</button>
   </div>
   <p class="hint">"Recheck no-matches" re-runs just the candidates from the batch below that came back
     no_match/error, in place -- no re-fetch from Curatal, no change to the resume cursor. Use it after a
-    matching-logic fix, or just to give a borderline case a second pass.</p>
+    matching-logic fix, or just to give a borderline case a second pass. "Download report" exports every
+    candidate processed since the last "Reset to first batch" (not just the batch showing below) -- the
+    way to see a full night's automatic run the next morning.</p>
 
   <div id="cursorText" class="hint"></div>
   <div id="progressText"></div>

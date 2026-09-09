@@ -286,6 +286,28 @@ async function getBulkBatchSnapshot() {
   return stored[BULK_BATCH_SNAPSHOT_KEY] || null;
 }
 
+// The results table only ever shows the CURRENT/last batch (bulkState.candidates
+// gets replaced wholesale on every new batch fetch) -- an autoContinue run left
+// going overnight would otherwise leave no way to see who was actually matched
+// across the whole sweep once morning's batch has scrolled everything else off.
+// Appended once per candidate, across every batch, until the next "Reset to
+// first batch" click clears it back out alongside the cursor.
+const BULK_ALL_RESULTS_KEY = 'bulkBackfillAllResults';
+
+async function appendToBulkReport(candidate) {
+  const stored = await chrome.storage.local.get([BULK_ALL_RESULTS_KEY]);
+  const rows = stored[BULK_ALL_RESULTS_KEY] || [];
+  rows.push({
+    fullName: candidate.fullName,
+    phone: candidate.phone,
+    email: candidate.email,
+    currentCompany: candidate.currentCompany,
+    status: candidate.status,
+    detail: candidate.detail,
+  });
+  await chrome.storage.local.set({ [BULK_ALL_RESULTS_KEY]: rows }).catch(() => {});
+}
+
 function normalizeForMatch(text) {
   return String(text || '')
     .toLowerCase()
@@ -1011,6 +1033,7 @@ async function processCandidate(tab, candidate) {
   else if (candidate.status === 'no_match') bulkState.totalNoMatch += 1;
   else if (candidate.status === 'error') bulkState.totalErrors += 1;
 
+  appendToBulkReport(candidate);
   broadcastBulkProgress();
 }
 
@@ -1208,7 +1231,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       bulkState.totalErrors = 0;
       bulkState.sweepComplete = false;
     }
-    setBulkCursor(0).then(() => chrome.storage.local.remove([BULK_BATCH_SNAPSHOT_KEY])).then(() => sendResponse({ ok: true }));
+    setBulkCursor(0)
+      .then(() => chrome.storage.local.remove([BULK_BATCH_SNAPSHOT_KEY, BULK_ALL_RESULTS_KEY]))
+      .then(() => sendResponse({ ok: true }));
+    return true;
+  }
+  if (message.type === 'GET_BULK_REPORT') {
+    chrome.storage.local.get([BULK_ALL_RESULTS_KEY]).then((stored) => {
+      sendResponse({ rows: stored[BULK_ALL_RESULTS_KEY] || [] });
+    });
     return true;
   }
   if (message.type === 'RECHECK_UNRESOLVED') {
