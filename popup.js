@@ -1,4 +1,5 @@
 let activeTabId = null;
+let currentProfileUrl = null;
 let scrapedLinkedinUrl = null;
 let scrapedTitle = null;
 
@@ -71,33 +72,46 @@ function renderStatus(result) {
   el('addSection').style.display = 'block';
 }
 
-async function init() {
-  const { loggedIn } = await chrome.runtime.sendMessage({ type: 'GET_LOGIN_STATE' });
-  if (!loggedIn) {
-    el('notConfigured').style.display = 'block';
-    el('openOptions').addEventListener('click', (e) => {
-      e.preventDefault();
-      chrome.runtime.openOptionsPage();
-    });
-    return;
-  }
-  el('configuredSections').style.display = 'block';
+// Clears out the previous profile's check/add form and result -- called
+// whenever the panel is about to load a different profile, so leftover
+// state (a stale "already on Curatal" banner, a phone number typed in for
+// the last person) never bleeds into the next one.
+function resetProfileSection() {
+  el('fullName').value = '';
+  el('company').value = '';
+  el('phone').value = '';
+  el('email').value = '';
+  el('phoneAutofillHint').style.display = 'none';
+  el('statusBox').innerHTML = '';
+  el('addSection').style.display = 'none';
+  el('uploadStatus').style.display = 'none';
+  scrapedLinkedinUrl = null;
+  scrapedTitle = null;
+}
 
-  // The skill-search box (below) works regardless of what page is open --
-  // only the single-profile check/add section needs an actual profile
-  // page open to scrape.
+// The skill-search box works regardless of what page is open -- only the
+// single-profile check/add section needs an actual profile page open to
+// scrape. Skipped entirely if the active tab/URL hasn't actually changed
+// (e.g. an onUpdated fire for a same-page status change), so this doesn't
+// re-scrape and re-autofill on every incidental event.
+async function loadProfileForActiveTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab || !/^https:\/\/www\.linkedin\.com\/in\//.test(tab.url || '')) {
+    activeTabId = null;
+    currentProfileUrl = null;
     el('notLinkedIn').style.display = 'block';
+    el('mainForm').style.display = 'none';
     return;
   }
-  activeTabId = tab.id;
-  el('mainForm').style.display = 'block';
-  await tryAutofillPhoneFromClipboard();
-  el('phone').addEventListener('input', () => {
-    el('phoneAutofillHint').style.display = 'none';
-  });
+  if (tab.id === activeTabId && tab.url === currentProfileUrl) return;
 
+  activeTabId = tab.id;
+  currentProfileUrl = tab.url;
+  el('notLinkedIn').style.display = 'none';
+  el('mainForm').style.display = 'block';
+  resetProfileSection();
+
+  await tryAutofillPhoneFromClipboard();
   await ensureContentScript(activeTabId);
   let scraped;
   try {
@@ -111,6 +125,46 @@ async function init() {
     scrapedLinkedinUrl = scraped.linkedinUrl;
     scrapedTitle = scraped.title;
   }
+}
+
+async function refreshLoginState() {
+  const { loggedIn } = await chrome.runtime.sendMessage({ type: 'GET_LOGIN_STATE' });
+  el('notConfigured').style.display = loggedIn ? 'none' : 'block';
+  el('configuredSections').style.display = loggedIn ? 'block' : 'none';
+  return loggedIn;
+}
+
+async function init() {
+  el('openOptions').addEventListener('click', (e) => {
+    e.preventDefault();
+    chrome.runtime.openOptionsPage();
+  });
+  el('phone').addEventListener('input', () => {
+    el('phoneAutofillHint').style.display = 'none';
+  });
+
+  if (await refreshLoginState()) await loadProfileForActiveTab();
+
+  // As a side panel (manifest.json's side_panel.default_path), this page
+  // is one long-lived document that stays open across navigation -- unlike
+  // the old action popup, which Chrome force-closed on every outside click
+  // and got a fresh init() on each reopen. It has to notice tab switches
+  // and in-tab navigation itself instead.
+  chrome.tabs.onActivated.addListener(async () => {
+    if (await refreshLoginState()) await loadProfileForActiveTab();
+  });
+  chrome.tabs.onUpdated.addListener(async (_tabId, changeInfo) => {
+    if (!changeInfo.url && changeInfo.status !== 'complete') return;
+    if (await refreshLoginState()) await loadProfileForActiveTab();
+  });
+  // Catches logging in via the options page while the panel is already
+  // open on a profile -- without this it stays stuck on "not configured"
+  // until the panel happens to reload some other way.
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local') return;
+    if (!('curatal_access_token' in changes)) return;
+    refreshLoginState().then((ok) => { if (ok) loadProfileForActiveTab(); });
+  });
 }
 
 el('searchSkillBtn').addEventListener('click', () => {

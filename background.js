@@ -1080,6 +1080,15 @@ chrome.runtime.onInstalled.addListener(() => {
     .catch(() => {});
 });
 
+// Without this, clicking the toolbar icon does nothing (there's no
+// default_popup any more, and no action.onClicked listener either) --
+// this is what makes the click open popup.html as a side panel instead.
+// A side panel, unlike the old popup, stays open across navigation within
+// the tab instead of Chrome force-closing it on every outside click, which
+// was the actual complaint (clicking a link to another LinkedIn profile
+// closed the popup before a real page reload even had a chance to happen).
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'START_BULK_BACKFILL') {
     runBulkBackfill(message.payload).catch((err) => console.error('[bulk] crawl failed', err));

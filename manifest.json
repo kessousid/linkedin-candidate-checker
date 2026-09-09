@@ -9,18 +9,20 @@
     "128": "icons/icon128.png"
   },
   "action": {
-    "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
     }
   },
+  "side_panel": {
+    "default_path": "popup.html"
+  },
   "options_page": "options.html",
   "background": {
     "service_worker": "background.js"
   },
-  "permissions": ["storage", "scripting", "activeTab", "clipboardRead"],
+  "permissions": ["storage", "scripting", "activeTab", "clipboardRead", "sidePanel"],
   "host_permissions": ["https://www.linkedin.com/*", "https://curatal-dev.openturf.dev/*"],
   "content_scripts": [
     {
