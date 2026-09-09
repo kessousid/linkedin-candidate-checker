@@ -5,7 +5,7 @@ function el(id) {
 function renderState(state) {
   const {
     candidates, running, processedCount, total, cursor,
-    autoContinue, batchesRun, totalMatched, totalNoMatch, totalErrors, sweepComplete,
+    autoContinue, batchesRun, totalMatched, totalNoMatch, totalErrors, sweepComplete, lastError,
   } = state;
   el('startBtn').disabled = running;
   el('stopBtn').disabled = !running;
@@ -20,6 +20,8 @@ function renderState(state) {
   if (!candidates || !candidates.length) {
     if (sweepComplete) {
       el('progressText').textContent = `Done — reached the end of the list. ${batchesRun || 0} batch(es) run this session: ${totalMatched || 0} matched, ${totalNoMatch || 0} no confident match, ${totalErrors || 0} errors.`;
+    } else if (lastError && !running) {
+      el('progressText').textContent = `Couldn't fetch candidates from Curatal: ${lastError}. Check you're logged in (Settings) and try Start again.`;
     } else {
       el('progressText').textContent = running ? 'Fetching candidates…' : 'Not started yet.';
     }
@@ -42,6 +44,8 @@ function renderState(state) {
   el('resultsTable').style.display = '';
   el('resultsBody').innerHTML = candidates.map((c) => `<tr>
     <td>${c.fullName}</td>
+    <td>${c.phone || ''}</td>
+    <td>${c.email || ''}</td>
     <td>${c.currentCompany || ''}</td>
     <td class="status-${c.status}">${c.status}</td>
     <td>${c.detail || ''}</td>

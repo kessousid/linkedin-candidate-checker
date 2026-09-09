@@ -9,11 +9,22 @@
 // for candidates: src/api/client.ts, src/api/environment.ts), not a plain
 // shared API key against a throwaway clone.
 const API_HOST = 'https://curatal-dev.openturf.dev';
+// Login goes through the separate recruiter_service (confirmed live: its
+// validation error names /home/ubuntu/curatal_backend/recruiter_service/...),
+// not the candidate-oriented accounts_service _login this used before.
 const LOGIN_PATH = '/api/v1/recruiter/login';
 const REFRESH_TOKEN_PATH = '/api/v1/refresh-token';
-const LOOKUP_PATH = '/api/v1/accounts/candidate/sourced/lookup';
-const ADD_PATH = '/api/v1/accounts/candidate/sourced';
-const MISSING_LINKEDIN_PATH = '/api/v1/accounts/candidate/sourced/missing-linkedin';
+// These three are business logic that only exists in accounts_service
+// (linkedinSourcedDB.service.js) -- reaching it requires the
+// /curatal_account prefix. Confirmed live, repeatedly: the unprefixed
+// /api/v1/accounts/... form gets a generic, header-thin 401 with an empty
+// body and none of accounts_service's actual security/rate-limit headers,
+// while this prefixed form gets the real { code: 'UN_AUTHORIZED', ... }
+// response with the full header set -- the unprefixed form isn't reaching
+// this service at all.
+const LOOKUP_PATH = '/curatal_account/api/v1/accounts/candidate/sourced/lookup';
+const ADD_PATH = '/curatal_account/api/v1/accounts/candidate/sourced';
+const MISSING_LINKEDIN_PATH = '/curatal_account/api/v1/accounts/candidate/sourced/missing-linkedin';
 
 const ACCESS_TOKEN_KEY = 'curatal_access_token';
 const REFRESH_TOKEN_KEY = 'curatal_refresh_token';
@@ -83,6 +94,12 @@ async function apiFetch(path, options = {}) {
 
   const doFetch = (token) => fetch(new URL(path, API_HOST), {
     ...options,
+    // The gateway briefly served a 200 HTML fallback for these paths before
+    // its routing rule was added (confirmed live). If a browser ever cached
+    // that response for a given URL+method, 'default' cache mode would keep
+    // replaying it locally even after the server-side fix -- 'no-store'
+    // guarantees every call actually reaches the network.
+    cache: 'no-store',
     headers: {
       'Content-Type': 'application/json',
       ...(options.headers || {}),
@@ -90,14 +107,39 @@ async function apiFetch(path, options = {}) {
     },
   });
 
-  let res = await doFetch(accessToken);
-  if (res.status === 401) {
-    const newToken = await refreshAccessToken();
-    if (!newToken) return { error: 'not_logged_in' };
-    res = await doFetch(newToken);
+  let res;
+  try {
+    res = await doFetch(accessToken);
+    if (res.status === 401) {
+      const newToken = await refreshAccessToken();
+      if (!newToken) return { error: 'not_logged_in' };
+      res = await doFetch(newToken);
+    }
+  } catch (err) {
+    // fetch() itself throws on a true network failure (DNS, connection
+    // refused, offline) -- this used to be uncaught, which for the bulk
+    // crawler meant runBulkBackfill's promise just rejected silently
+    // (caught only by the top-level .catch(console.error) on the message
+    // handler), leaving bulkState stuck at "running" forever with no
+    // error ever shown in the UI.
+    return { error: `network_error: ${(err && err.message) || err}` };
   }
 
-  const body = await res.json().catch(() => ({}));
+  // Read as text first, not res.json() directly -- a gateway that doesn't
+  // recognize this path can return 200 with an HTML fallback page (e.g.
+  // serving the frontend app for any unmatched route) instead of a real
+  // 404, which used to silently collapse into an empty {} body via
+  // res.json().catch(() => ({})) and surface as an unhelpful generic
+  // "missing_linkedin_fetch_failed" with no way to tell what actually
+  // came back.
+  const rawText = await res.text().catch(() => '');
+  let body;
+  try {
+    body = rawText ? JSON.parse(rawText) : {};
+  } catch {
+    const snippet = rawText.slice(0, 200).replace(/\s+/g, ' ').trim();
+    return { error: `non_json_response_${res.status}: ${snippet || '(empty body)'}` };
+  }
   if (!res.ok) {
     return { error: body.error || body.message || `backend_error_${res.status}` };
   }
@@ -157,11 +199,11 @@ const BULK_BATCH_SNAPSHOT_KEY = 'bulkBackfillBatchSnapshot';
 function persistBulkBatchSnapshot() {
   const {
     candidates, total, processedCount, batchesRun,
-    totalMatched, totalNoMatch, totalErrors, autoContinue, sweepComplete,
+    totalMatched, totalNoMatch, totalErrors, autoContinue, sweepComplete, lastError,
   } = bulkState;
   chrome.storage.local.set({
     [BULK_BATCH_SNAPSHOT_KEY]: {
-      candidates, total, processedCount, batchesRun, totalMatched, totalNoMatch, totalErrors, autoContinue, sweepComplete,
+      candidates, total, processedCount, batchesRun, totalMatched, totalNoMatch, totalErrors, autoContinue, sweepComplete, lastError,
     },
   }).catch(() => {});
 }
@@ -807,6 +849,7 @@ async function resolveNameMatch(nameMatches, candidate, tab) {
 let bulkState = {
   running: false, candidates: [], processedCount: 0, total: 0, stopRequested: false, cursor: 0,
   autoContinue: false, batchesRun: 0, totalMatched: 0, totalNoMatch: 0, totalErrors: 0, sweepComplete: false,
+  lastError: null,
 };
 
 function broadcastBulkProgress() {
@@ -952,6 +995,7 @@ async function runBulkBackfill({ limit, autoContinue }) {
     totalNoMatch: 0,
     totalErrors: 0,
     sweepComplete: false,
+    lastError: null,
   };
   broadcastBulkProgress();
 
@@ -960,7 +1004,14 @@ async function runBulkBackfill({ limit, autoContinue }) {
   for (;;) {
     // eslint-disable-next-line no-await-in-loop
     const result = await fetchMissingLinkedinCandidates(limit, bulkState.cursor);
-    if (result.error || !result.candidates) break;
+    if (result.error || !result.candidates) {
+      // Fetching the candidate list itself failed (auth, network, gateway
+      // routing, backend error) -- surface it instead of silently reverting
+      // to "not started", which looked indistinguishable from never having
+      // clicked Start at all.
+      bulkState.lastError = result.error || 'missing_linkedin_fetch_failed';
+      break;
+    }
     if (!result.candidates.length) {
       bulkState.sweepComplete = true;
       break;
