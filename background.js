@@ -9,12 +9,11 @@
 // for candidates: src/api/client.ts, src/api/environment.ts), not a plain
 // shared API key against a throwaway clone.
 const API_HOST = 'https://curatal-dev.openturf.dev';
-const ACCOUNTS_PREFIX = '/curatal_account/api/v1/accounts';
-const LOGIN_PATH = `${ACCOUNTS_PREFIX}/_login`;
-const REFRESH_TOKEN_PATH = `${ACCOUNTS_PREFIX}/_refresh-token`;
-const LOOKUP_PATH = `${ACCOUNTS_PREFIX}/candidate/sourced/lookup`;
-const ADD_PATH = `${ACCOUNTS_PREFIX}/candidate/sourced`;
-const MISSING_LINKEDIN_PATH = `${ACCOUNTS_PREFIX}/candidate/sourced/missing-linkedin`;
+const LOGIN_PATH = '/api/v1/recruiter/login';
+const REFRESH_TOKEN_PATH = '/api/v1/refresh-token';
+const LOOKUP_PATH = '/v1/accounts/candidate/sourced/lookup';
+const ADD_PATH = '/v1/accounts/candidate/sourced';
+const MISSING_LINKEDIN_PATH = '/v1/accounts/candidate/sourced/missing-linkedin';
 
 const ACCESS_TOKEN_KEY = 'curatal_access_token';
 const REFRESH_TOKEN_KEY = 'curatal_refresh_token';
