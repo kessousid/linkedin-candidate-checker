@@ -485,10 +485,27 @@ async function searchCandidateProfiles(tab, candidate) {
 // there on LinkedIn. Falling back to just the first name -- the part of a
 // name least likely to have this problem -- plus whatever company/
 // education signal is available trades search precision for actually
-// surfacing the candidate to check; namesMatch()'s looser comparison is
-// what makes it safe to still count as a match once we're looking at the
-// real card. Skipped when there's no company or education to narrow by --
+// surfacing the candidate to check; firstNameMatches() below (not the
+// full-name namesMatch) is what makes it safe to still count as a match
+// once we're looking at the real card. Skipped when there's no company or
+// education to narrow by --
 // a bare first name alone is too noisy to be worth the extra request.
+// Same first-word comparison as namesMatch's prefix logic (exact, or a
+// single-letter initial expansion), but on the first word ALONE -- used
+// only for filtering buildFirstNameFallbackKeywords' results, where the
+// surname itself is exactly what's in question (a search-index quirk like
+// "Veermatam"/"Veer Matam", or a plain spelling variant like "Dayan"/
+// "Dayaan"). Requiring the full name to still line up via namesMatch here
+// would just reintroduce the same strictness this fallback exists to route
+// around; resolveNameMatch's experience/education batches are what
+// actually confirm the candidate from here, same as every other tier.
+function firstNameMatches(cardName, candidateFullName) {
+  const cardFirst = normalizeForMatch(cardName).split(' ')[0] || '';
+  const candidateFirst = normalizeForMatch(candidateFullName).split(' ')[0] || '';
+  if (!cardFirst || !candidateFirst) return false;
+  return wordMatches(cardFirst, candidateFirst) || wordMatches(candidateFirst, cardFirst);
+}
+
 function buildFirstNameFallbackKeywords(candidate) {
   const firstWord = String(candidate.fullName || '').trim().split(/\s+/)[0];
   if (!firstWord) return null;
@@ -884,7 +901,7 @@ async function processCandidate(tab, candidate) {
         await sleep(1500 + Math.random() * 1000);
         const cards = await searchLinkedIn(tab, fallbackKeywords);
         rawCardsSeen = rawCardsSeen || cards.length > 0;
-        nameMatches = cards.filter((card) => namesMatch(card.name, candidate.fullName));
+        nameMatches = cards.filter((card) => firstNameMatches(card.name, candidate.fullName));
       }
     }
 
@@ -1093,6 +1110,24 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
   if (message.type === 'RESET_BULK_CURSOR') {
+    // Clearing storage alone isn't enough -- if a prior reload already
+    // restored a snapshot into the live bulkState (see
+    // GET_BULK_BACKFILL_STATUS above), bulkState.candidates.length is
+    // nonzero, which skips that restore-from-storage branch on every later
+    // status poll. The page then keeps getting this stale in-memory batch
+    // echoed back, making Reset look like it did nothing even though
+    // storage was cleared correctly.
+    if (!bulkState.running) {
+      bulkState.candidates = [];
+      bulkState.cursor = 0;
+      bulkState.total = 0;
+      bulkState.processedCount = 0;
+      bulkState.batchesRun = 0;
+      bulkState.totalMatched = 0;
+      bulkState.totalNoMatch = 0;
+      bulkState.totalErrors = 0;
+      bulkState.sweepComplete = false;
+    }
     setBulkCursor(0).then(() => chrome.storage.local.remove([BULK_BATCH_SNAPSHOT_KEY])).then(() => sendResponse({ ok: true }));
     return true;
   }
