@@ -1,5 +1,6 @@
 let activeTabId = null;
 let scrapedLinkedinUrl = null;
+let scrapedTitle = null;
 
 function el(id) {
   return document.getElementById(id);
@@ -20,6 +21,35 @@ async function ensureContentScript(tabId) {
   } catch {
     // Injection can fail on pages the extension isn't allowed to touch;
     // the subsequent sendMessage below will surface that as its own error.
+  }
+}
+
+// Loose enough to catch real-world formats (spaces, dashes, parens, a
+// leading +country code) without also matching arbitrary copied text --
+// mostly digits, 7-15 digits total once separators are stripped. This is a
+// convenience pre-fill, never a requirement: the field stays a normal,
+// fully-editable text input either way, since phone/email lookup tools
+// aren't something every user runs every time.
+function looksLikePhoneNumber(text) {
+  const trimmed = (text || '').trim();
+  if (!trimmed || trimmed.length > 25) return false;
+  if (!/^\+?[\d\s\-().]+$/.test(trimmed)) return false;
+  const digitCount = (trimmed.match(/\d/g) || []).length;
+  return digitCount >= 7 && digitCount <= 15;
+}
+
+async function tryAutofillPhoneFromClipboard() {
+  if (el('phone').value.trim()) return; // never clobber something already there
+  try {
+    const clipboardText = await navigator.clipboard.readText();
+    if (looksLikePhoneNumber(clipboardText)) {
+      el('phone').value = clipboardText.trim();
+      el('phoneAutofillHint').style.display = 'block';
+    }
+  } catch {
+    // Clipboard read can fail (permission not yet granted, empty/non-text
+    // clipboard, popup not focused) -- silently leave the field for manual
+    // entry, which always works regardless.
   }
 }
 
@@ -62,6 +92,10 @@ async function init() {
   }
   activeTabId = tab.id;
   el('mainForm').style.display = 'block';
+  await tryAutofillPhoneFromClipboard();
+  el('phone').addEventListener('input', () => {
+    el('phoneAutofillHint').style.display = 'none';
+  });
 
   await ensureContentScript(activeTabId);
   let scraped;
@@ -74,6 +108,7 @@ async function init() {
     el('fullName').value = scraped.fullName || '';
     el('company').value = scraped.company || '';
     scrapedLinkedinUrl = scraped.linkedinUrl;
+    scrapedTitle = scraped.title;
   }
 }
 
@@ -84,9 +119,19 @@ el('searchSkillBtn').addEventListener('click', () => {
   chrome.tabs.create({ url });
 });
 
+el('bulkBackfillLink').addEventListener('click', (e) => {
+  e.preventDefault();
+  chrome.tabs.create({ url: chrome.runtime.getURL('bulk-backfill.html') });
+});
+
 el('checkBtn').addEventListener('click', async () => {
+  const fullName = el('fullName').value.trim();
   const phone = el('phone').value.trim();
   const email = el('email').value.trim();
+  if (!fullName) {
+    el('statusBox').innerHTML = '<div class="status error">Enter a name to check.</div>';
+    return;
+  }
   if (!phone && !email) {
     el('statusBox').innerHTML = '<div class="status error">Enter a phone number or email to check.</div>';
     return;
@@ -94,7 +139,7 @@ el('checkBtn').addEventListener('click', async () => {
 
   el('checkBtn').disabled = true;
   el('statusBox').innerHTML = '<div class="status not_found">Checking…</div>';
-  const result = await chrome.runtime.sendMessage({ type: 'CHECK_CANDIDATE', payload: { phone, email } });
+  const result = await chrome.runtime.sendMessage({ type: 'CHECK_CANDIDATE', payload: { fullName, phone, email, linkedinUrl: scrapedLinkedinUrl } });
   el('checkBtn').disabled = false;
   renderStatus(result);
 });
@@ -110,6 +155,12 @@ el('addBtn').addEventListener('click', async () => {
   const company = el('company').value.trim();
   const phone = el('phone').value.trim();
   const email = el('email').value.trim();
+  const pdfDataUrl = buildProfileSummaryPdf({
+    fullName,
+    title: scrapedTitle,
+    company,
+    linkedinUrl: scrapedLinkedinUrl,
+  });
 
   const result = await chrome.runtime.sendMessage({
     type: 'UPLOAD_CANDIDATE',
@@ -119,6 +170,7 @@ el('addBtn').addEventListener('click', async () => {
       email,
       currentCompany: company,
       linkedinUrl: scrapedLinkedinUrl,
+      pdfDataUrl,
     },
   });
   el('addBtn').disabled = false;

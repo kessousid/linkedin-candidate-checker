@@ -73,7 +73,7 @@ function setStatus(statusEl, text, kind) {
 // Only ever called from an explicit click (per-card or the "check all
 // visible" batch button), never on page load/scroll.
 async function checkAndAddCard(card, statusEl, contactEls) {
-  const { company } = parseHeadline(card.headline);
+  const { title, company } = parseHeadline(card.headline);
   const phone = contactEls.phone.value.trim();
   const email = contactEls.email.value.trim();
   if (!phone && !email) {
@@ -84,7 +84,7 @@ async function checkAndAddCard(card, statusEl, contactEls) {
 
   const checkResult = await chrome.runtime.sendMessage({
     type: 'CHECK_CANDIDATE',
-    payload: { phone, email },
+    payload: { fullName: card.name, phone, email, linkedinUrl: card.linkedinUrl },
   });
   if (checkResult.error) {
     setStatus(statusEl, `Error: ${checkResult.error}`, 'error');
@@ -96,6 +96,12 @@ async function checkAndAddCard(card, statusEl, contactEls) {
   }
 
   setStatus(statusEl, 'Adding…', null);
+  const pdfDataUrl = buildProfileSummaryPdf({
+    fullName: card.name,
+    title,
+    company,
+    linkedinUrl: card.linkedinUrl,
+  });
   const uploadResult = await chrome.runtime.sendMessage({
     type: 'UPLOAD_CANDIDATE',
     payload: {
@@ -104,6 +110,7 @@ async function checkAndAddCard(card, statusEl, contactEls) {
       email,
       currentCompany: company,
       linkedinUrl: card.linkedinUrl,
+      pdfDataUrl,
     },
   });
   if (uploadResult.error) {

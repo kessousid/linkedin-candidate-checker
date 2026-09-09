@@ -1,0 +1,76 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Curatal — Bulk LinkedIn Backfill</title>
+<style>
+  body {
+    font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+    font-size: 13px;
+    color: #1a1a1a;
+    max-width: 900px;
+    margin: 24px auto;
+    padding: 0 16px;
+  }
+  h1 { font-size: 18px; }
+  .hint { color: #666; font-size: 12px; line-height: 1.5; }
+  .controls { display: flex; align-items: center; gap: 10px; margin: 14px 0; }
+  input[type="number"] { width: 70px; padding: 6px; font-size: 13px; border: 1px solid #ccc; border-radius: 4px; }
+  button {
+    padding: 8px 16px; border: none; border-radius: 4px;
+    background: #1b4b8c; color: white; font-size: 13px; cursor: pointer;
+  }
+  button:disabled { background: #a9b7c9; cursor: default; }
+  button.secondary { background: #eef1f6; color: #1b4b8c; }
+  #progressText { margin: 10px 0; font-size: 13px; color: #333; }
+  table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+  th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; font-size: 12px; }
+  th { background: #f5f5f5; }
+  .status-matched { color: #1e7a34; font-weight: bold; }
+  .status-no_match { color: #8a6100; }
+  .status-error { color: #b3261e; }
+  .status-pending { color: #999; }
+  .status-searching { color: #1b4b8c; }
+</style>
+</head>
+<body>
+  <h1>Bulk LinkedIn Backfill</h1>
+  <p class="hint">
+    Pulls real candidates from Curatal who don't have a LinkedIn URL yet, searches LinkedIn for each by name,
+    then works through the name-matching results in batches of 3: first checks just <strong>Experience</strong>
+    (full history, not just the current headline) against the company on file in Curatal — if exactly one profile
+    in the batch agrees, that's the match. If that's ambiguous or empty, it re-checks the same 3 profiles adding
+    <strong>Education</strong> into the mix (a profile now counts if either signal agrees), which can pull apart
+    an ambiguous pair or catch a stale company. Still unresolved? Moves to the next 3 name-matches and repeats —
+    up to 2 batches (6 profiles) per candidate. Anything still uncertain after that is left alone rather than
+    guessed. Runs one candidate at a time with pauses in between (not a burst of requests), and keeps running in
+    the background even if you close this tab. Note: visiting full profiles (not just search results) counts
+    against LinkedIn's monthly profile-view limit for non-premium accounts more than searching alone does.
+  </p>
+
+  <div class="controls">
+    <label>Batch size: <input type="number" id="limitInput" value="25" min="1" max="500" /></label>
+    <label><input type="radio" name="mode" id="modeManual" value="manual" checked /> Manual (one batch, click Start again for the next)</label>
+    <label><input type="radio" name="mode" id="modeAuto" value="auto" /> Automatic (keeps going batch after batch until Stop or the list is fully swept)</label>
+    <button id="startBtn">Start</button>
+    <button id="stopBtn" class="secondary" disabled>Stop</button>
+    <button id="resetCursorBtn" class="secondary">Reset to first batch</button>
+    <button id="recheckBtn" class="secondary" disabled>Recheck no-matches</button>
+  </div>
+  <p class="hint">"Recheck no-matches" re-runs just the candidates from the batch below that came back
+    no_match/error, in place -- no re-fetch from Curatal, no change to the resume cursor. Use it after a
+    matching-logic fix, or just to give a borderline case a second pass.</p>
+
+  <div id="cursorText" class="hint"></div>
+  <div id="progressText"></div>
+
+  <table id="resultsTable" style="display:none">
+    <thead>
+      <tr><th>Name</th><th>Current company (Curatal)</th><th>Status</th><th>Detail</th></tr>
+    </thead>
+    <tbody id="resultsBody"></tbody>
+  </table>
+
+  <script src="bulk-backfill.js"></script>
+</body>
+</html>

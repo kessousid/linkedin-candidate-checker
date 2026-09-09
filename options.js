@@ -1,39 +1,54 @@
-async function load() {
-  const { loggedIn } = await chrome.runtime.sendMessage({ type: 'GET_LOGIN_STATE' });
-  const loggedInAs = document.getElementById('loggedInAs');
+function el(id) {
+  return document.getElementById(id);
+}
+
+function renderLoginState({ loggedIn, email }) {
+  el('loggedInView').style.display = loggedIn ? 'block' : 'none';
+  el('loginForm').style.display = loggedIn ? 'none' : 'block';
   if (loggedIn) {
-    loggedInAs.style.display = 'block';
-    loggedInAs.textContent = 'Logged in to Curatal Dev.';
-    document.getElementById('saveBtn').textContent = 'Log in as someone else';
+    el('loggedInAs').textContent = `Logged in as ${email || 'a Curatal Dev recruiter'}.`;
   }
 }
 
-document.getElementById('saveBtn').addEventListener('click', async () => {
-  const status = document.getElementById('status');
-  const email = document.getElementById('email').value.trim();
-  const password = document.getElementById('password').value;
+async function load() {
+  const state = await chrome.runtime.sendMessage({ type: 'GET_LOGIN_STATE' });
+  renderLoginState(state);
+}
+
+el('loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const status = el('status');
+  const email = el('email').value.trim();
+  const password = el('password').value;
 
   if (!email || !password) {
-    status.textContent = 'Email and password are both required.';
+    status.className = 'status error';
+    status.textContent = 'Email and password are required.';
     return;
   }
 
-  // curatal-dev.openturf.dev is baked into manifest.json's host_permissions
-  // (not requested at runtime) precisely so there's no path in this
-  // extension that can be pointed at staging or production.
+  el('loginBtn').disabled = true;
+  status.className = 'status';
   status.textContent = 'Logging in…';
-  const result = await chrome.runtime.sendMessage({
-    type: 'RECRUITER_LOGIN',
-    payload: { email, password },
-  });
+
+  const result = await chrome.runtime.sendMessage({ type: 'LOGIN', payload: { email, password } });
+  el('loginBtn').disabled = false;
 
   if (result.error) {
+    status.className = 'status error';
     status.textContent = `Login failed: ${result.error}`;
     return;
   }
+
+  status.className = 'status ok';
   status.textContent = 'Logged in.';
-  document.getElementById('password').value = '';
-  load();
+  el('password').value = '';
+  await load();
+});
+
+el('logoutBtn').addEventListener('click', async () => {
+  await chrome.runtime.sendMessage({ type: 'LOGOUT' });
+  await load();
 });
 
 load();

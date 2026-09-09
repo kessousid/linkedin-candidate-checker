@@ -32,23 +32,32 @@
     font-size: 14px;
     cursor: pointer;
   }
+  button:disabled { background: #a9b7c9; cursor: default; }
+  button.secondary { background: #eef1f6; color: #1b4b8c; }
   #status { margin-top: 12px; font-size: 13px; }
+  .status.error { color: #b3261e; }
+  .status.ok { color: #1e7a34; }
 </style>
 </head>
 <body>
   <h1>Curatal Candidate Checker — Settings</h1>
-  <p>Connects to the real Curatal <strong>Dev</strong> environment only (<code>curatal-dev.openturf.dev</code>) — never staging or production. Log in with your Curatal Dev recruiter account.</p>
+  <p>Connects to the real Curatal Dev environment (curatal-dev.openturf.dev) as a signed-in recruiter — never staging or production, that host isn't configurable here.</p>
 
-  <label>Recruiter email
-    <input type="email" id="email" placeholder="you@curatal.com" />
-  </label>
-  <label>Password
-    <input type="password" id="password" />
-  </label>
+  <div id="loggedInView" style="display:none">
+    <div id="loggedInAs" style="font-size:13px; color:#1e7a34;"></div>
+    <button id="logoutBtn" class="secondary">Log out</button>
+  </div>
 
-  <button id="saveBtn">Log in</button>
+  <form id="loginForm">
+    <label>Recruiter email
+      <input type="text" id="email" autocomplete="username" />
+    </label>
+    <label>Password
+      <input type="password" id="password" autocomplete="current-password" />
+    </label>
+    <button id="loginBtn" type="submit">Log in</button>
+  </form>
   <div id="status"></div>
-  <div id="loggedInAs" style="display:none; margin-top:14px; font-size:13px; color:#1e7a34;"></div>
 
   <script src="options.js"></script>
 </body>
