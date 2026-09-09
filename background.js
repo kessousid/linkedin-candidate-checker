@@ -147,12 +147,13 @@ async function apiFetch(path, options = {}) {
 }
 
 async function checkCandidate({ fullName, phone, email, linkedinUrl }) {
-  // fullName is required by the real endpoint's validation, not just this
-  // client -- phone-only matching false-positives on a recycled number
-  // (found live prototyping this extension against a disposable DB
-  // clone), so the accounts service now rejects a lookup without it.
-  if (!fullName) return { error: 'fullName_required' };
-  if (!phone && !email) return { error: 'phone_or_email_required' };
+  // linkedinUrl is now the primary lookup key -- a LinkedIn profile is
+  // enough on its own to check, since (unlike a phone number) it can't
+  // collide with an unrelated candidate. phone/email remain optional
+  // secondary signals; at least one identifier of any kind is still
+  // required (the real endpoint's validation enforces this too, not just
+  // this client).
+  if (!phone && !email && !linkedinUrl) return { error: 'identifier_required' };
   return apiFetch(LOOKUP_PATH, {
     method: 'POST',
     body: JSON.stringify({ fullName, phone, email, linkedinUrl }),

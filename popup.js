@@ -63,10 +63,11 @@ function renderStatus(result) {
     return;
   }
   if (result.exists) {
-    box.innerHTML = `<div class="status found">✅ Already on Curatal<br><strong>${result.fullName || ''}</strong></div>`;
+    const viaText = result.via === 'linkedin_url' ? 'This LinkedIn user is already on Curatal' : 'Already on Curatal';
+    box.innerHTML = `<div class="status found">✅ ${viaText}<br><strong>${result.fullName || ''}</strong></div>`;
     return;
   }
-  box.innerHTML = `<div class="status not_found">Not found on Curatal (checked by phone/email).</div>`;
+  box.innerHTML = `<div class="status not_found">Not found on Curatal.</div>`;
   el('addSection').style.display = 'block';
 }
 
@@ -132,8 +133,8 @@ el('checkBtn').addEventListener('click', async () => {
     el('statusBox').innerHTML = '<div class="status error">Enter a name to check.</div>';
     return;
   }
-  if (!phone && !email) {
-    el('statusBox').innerHTML = '<div class="status error">Enter a phone number or email to check.</div>';
+  if (!phone && !email && !scrapedLinkedinUrl) {
+    el('statusBox').innerHTML = '<div class="status error">No LinkedIn profile URL found, and no phone/email entered -- need at least one to check.</div>';
     return;
   }
 

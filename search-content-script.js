@@ -66,20 +66,19 @@ function setStatus(statusEl, text, kind) {
   statusEl.style.color = { found: '#1e7a34', added: '#1e7a34', review: '#8a6100', error: '#b3261e' }[kind] || '#666';
 }
 
-// Checks Curatal for one card by phone/email and, if missing, adds it. Phone
-// (and optionally email) has to come from whatever separate lookup tool the
-// recruiter is using alongside this extension -- LinkedIn's search results
-// never expose either, so there's a small input for it right on the card.
-// Only ever called from an explicit click (per-card or the "check all
-// visible" batch button), never on page load/scroll.
+// Checks Curatal for one card, primarily by the profile's own LinkedIn URL
+// (always available straight from the search card, no extra input needed)
+// -- unlike a phone number, a LinkedIn URL can't collide with an unrelated
+// candidate, so it needs no other signal to check confidently. Phone/email
+// remain optional secondary inputs (from whatever separate lookup tool the
+// recruiter is using) for when a LinkedIn-URL check comes back not-found
+// and phone/email might still catch an existing record with a stale/no
+// LinkedIn URL on file. Only ever called from an explicit click (per-card
+// or the "check all visible" batch button), never on page load/scroll.
 async function checkAndAddCard(card, statusEl, contactEls) {
   const { title, company } = parseHeadline(card.headline);
   const phone = contactEls.phone.value.trim();
   const email = contactEls.email.value.trim();
-  if (!phone && !email) {
-    setStatus(statusEl, 'Enter a phone or email first', 'error');
-    return;
-  }
   setStatus(statusEl, 'Checking…', null);
 
   const checkResult = await chrome.runtime.sendMessage({
@@ -91,7 +90,12 @@ async function checkAndAddCard(card, statusEl, contactEls) {
     return;
   }
   if (checkResult.exists) {
-    setStatus(statusEl, '✅ Already on Curatal', 'found');
+    const viaText = checkResult.via === 'linkedin_url' ? '✅ This LinkedIn user is already on Curatal' : '✅ Already on Curatal';
+    setStatus(statusEl, viaText, 'found');
+    return;
+  }
+  if (!phone && !email) {
+    setStatus(statusEl, 'Not found by LinkedIn URL. Enter a phone or email to add.', 'review');
     return;
   }
 
@@ -129,12 +133,14 @@ function injectCardControls(card) {
   wrap.className = CONTROLS_CLASS;
   wrap.style.cssText = 'margin-top:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;';
 
-  // LinkedIn search results never expose phone/email -- these are filled in
-  // manually (from whatever separate lookup tool the recruiter is using)
-  // before checking/adding this card.
+  // LinkedIn search results never expose phone/email, and checking no
+  // longer needs them -- the card's own LinkedIn URL is enough on its own.
+  // These stay here as optional manual input (from whatever separate
+  // lookup tool the recruiter is using) for the not-found case, since
+  // adding a new candidate still needs a phone number.
   const phoneInput = document.createElement('input');
   phoneInput.type = 'text';
-  phoneInput.placeholder = 'Phone';
+  phoneInput.placeholder = 'Phone (optional)';
   phoneInput.style.cssText = 'width:110px;padding:3px 6px;font-size:12px;border:1px solid #ccc;border-radius:4px;';
 
   const emailInput = document.createElement('input');
