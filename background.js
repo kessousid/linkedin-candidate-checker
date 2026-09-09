@@ -11,9 +11,9 @@
 const API_HOST = 'https://curatal-dev.openturf.dev';
 const LOGIN_PATH = '/api/v1/recruiter/login';
 const REFRESH_TOKEN_PATH = '/api/v1/refresh-token';
-const LOOKUP_PATH = '/v1/accounts/candidate/sourced/lookup';
-const ADD_PATH = '/v1/accounts/candidate/sourced';
-const MISSING_LINKEDIN_PATH = '/v1/accounts/candidate/sourced/missing-linkedin';
+const LOOKUP_PATH = '/api/v1/accounts/candidate/sourced/lookup';
+const ADD_PATH = '/api/v1/accounts/candidate/sourced';
+const MISSING_LINKEDIN_PATH = '/api/v1/accounts/candidate/sourced/missing-linkedin';
 
 const ACCESS_TOKEN_KEY = 'curatal_access_token';
 const REFRESH_TOKEN_KEY = 'curatal_refresh_token';
