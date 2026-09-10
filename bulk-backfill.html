@@ -51,13 +51,19 @@
   <div class="controls">
     <label>Batch size: <input type="number" id="limitInput" value="25" min="1" max="500" /></label>
     <label><input type="radio" name="mode" id="modeManual" value="manual" checked /> Manual (one batch, click Start again for the next)</label>
-    <label><input type="radio" name="mode" id="modeAuto" value="auto" /> Automatic (keeps going batch after batch until Stop or the list is fully swept)</label>
+    <label style="color:#999"><input type="radio" name="mode" id="modeAuto" value="auto" disabled /> Automatic -- disabled for now (see warning below)</label>
     <button id="startBtn">Start</button>
     <button id="stopBtn" class="secondary" disabled>Stop</button>
     <button id="resetCursorBtn" class="secondary">Reset to first batch</button>
     <button id="recheckBtn" class="secondary" disabled>Recheck no-matches</button>
     <button id="downloadReportBtn" class="secondary">Download report (CSV)</button>
   </div>
+  <p class="hint" style="color:#b3261e">
+    LinkedIn flagged this account for automated profile access after an unattended overnight run and showed a
+    security checkpoint. Automatic mode is disabled until that's confirmed cleared, and Start is limited to 2
+    batches per rolling 15 minutes (manual click each time) -- both enforced here and in the background script,
+    so this can't be bypassed by re-enabling the radio button by hand.
+  </p>
   <p class="hint">"Recheck no-matches" re-runs just the candidates from the batch below that came back
     no_match/error, in place -- no re-fetch from Curatal, no change to the resume cursor. Use it after a
     matching-logic fix, or just to give a borderline case a second pass. "Download report" exports every

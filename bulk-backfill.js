@@ -20,6 +20,8 @@ function renderState(state) {
   if (!candidates || !candidates.length) {
     if (sweepComplete) {
       el('progressText').textContent = `Done — reached the end of the list. ${batchesRun || 0} batch(es) run this session: ${totalMatched || 0} matched, ${totalNoMatch || 0} no confident match, ${totalErrors || 0} errors.`;
+    } else if (lastError && lastError.startsWith('Paused for safety') && !running) {
+      el('progressText').textContent = lastError;
     } else if (lastError && !running) {
       el('progressText').textContent = `Couldn't fetch candidates from Curatal: ${lastError}. Check you're logged in (Settings) and try Start again.`;
     } else {
@@ -73,8 +75,9 @@ el('resetCursorBtn').addEventListener('click', async () => {
 el('recheckBtn').addEventListener('click', async () => {
   el('recheckBtn').disabled = true;
   const result = await chrome.runtime.sendMessage({ type: 'RECHECK_UNRESOLVED' });
-  if (result && result.error === 'nothing_to_recheck') {
+  if (result && result.error) {
     el('recheckBtn').disabled = false;
+    if (result.error !== 'nothing_to_recheck') el('progressText').textContent = result.error;
   }
 });
 

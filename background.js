@@ -261,6 +261,44 @@ async function setBulkCursor(value) {
   await chrome.storage.local.set({ [BULK_CURSOR_KEY]: value });
 }
 
+// LinkedIn flagged this account for automated profile access after an
+// unattended overnight autoContinue run (a real security checkpoint, not
+// just a rate-limit page) -- this caps every LinkedIn-visiting entry point
+// (a fresh batch, or a recheck) to at most BULK_RATE_LIMIT_MAX_BATCHES
+// within a rolling BULK_RATE_LIMIT_WINDOW_MS, persisted in storage so it
+// holds across service-worker restarts, not just in-memory for one run.
+// Enforced here in the background script -- not just by disabling the
+// Automatic radio in bulk-backfill.html -- so it can't be bypassed by
+// re-enabling that control by hand.
+const BULK_BATCH_TIMESTAMPS_KEY = 'bulkBackfillBatchTimestamps';
+const BULK_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+const BULK_RATE_LIMIT_MAX_BATCHES = 2;
+
+async function getRecentBulkBatchTimestamps() {
+  const stored = await chrome.storage.local.get([BULK_BATCH_TIMESTAMPS_KEY]);
+  const all = stored[BULK_BATCH_TIMESTAMPS_KEY] || [];
+  const cutoff = Date.now() - BULK_RATE_LIMIT_WINDOW_MS;
+  return all.filter((t) => t > cutoff);
+}
+
+async function recordBulkBatchStart(recent) {
+  await chrome.storage.local.set({ [BULK_BATCH_TIMESTAMPS_KEY]: [...recent, Date.now()] });
+}
+
+// Returns an error string if starting now would exceed the rate limit,
+// or null if it's fine to proceed (and records this attempt as one of
+// the allowed ones).
+async function checkAndRecordBulkRateLimit() {
+  const recent = await getRecentBulkBatchTimestamps();
+  if (recent.length >= BULK_RATE_LIMIT_MAX_BATCHES) {
+    const waitMs = BULK_RATE_LIMIT_WINDOW_MS - (Date.now() - Math.min(...recent));
+    const waitMin = Math.max(1, Math.ceil(waitMs / 60000));
+    return `Paused for safety: already started ${BULK_RATE_LIMIT_MAX_BATCHES} LinkedIn-visiting runs in the last 15 minutes (LinkedIn flagged this account for automated access once already) -- wait ${waitMin} more minute(s) before trying again.`;
+  }
+  await recordBulkBatchStart(recent);
+  return null;
+}
+
 // bulkState otherwise lives only in the service worker's memory -- a
 // reload or browser restart wipes it, taking the currently-displayed
 // batch (and anything Recheck could act on) with it even though the
@@ -1048,6 +1086,9 @@ async function recheckUnresolved() {
   const targets = bulkState.candidates.filter((c) => c.status === 'no_match' || c.status === 'error');
   if (!targets.length) return { ok: false, error: 'nothing_to_recheck' };
 
+  const rateLimitError = await checkAndRecordBulkRateLimit();
+  if (rateLimitError) return { ok: false, error: rateLimitError };
+
   bulkState.running = true;
   bulkState.stopRequested = false;
   bulkState.total = targets.length;
@@ -1091,8 +1132,16 @@ async function recheckUnresolved() {
 // a crash mid-batch still leaves the cursor past everything already
 // completed -- until either Stop is clicked or a fetch comes back with no
 // candidates left (the whole list has been swept).
-async function runBulkBackfill({ limit, autoContinue }) {
+async function runBulkBackfill({ limit }) {
   if (bulkState.running) return;
+
+  const rateLimitError = await checkAndRecordBulkRateLimit();
+  if (rateLimitError) {
+    bulkState.lastError = rateLimitError;
+    broadcastBulkProgress();
+    return;
+  }
+
   const cursor = await getBulkCursor();
   bulkState = {
     running: true,
@@ -1101,7 +1150,11 @@ async function runBulkBackfill({ limit, autoContinue }) {
     total: 0,
     stopRequested: false,
     cursor,
-    autoContinue: !!autoContinue,
+    // Automatic mode is disabled for now (see bulk-backfill.html) --
+    // continuous unattended runs are what got this LinkedIn account
+    // flagged with a security checkpoint, so this ignores whatever the
+    // request asked for and always stops after one batch.
+    autoContinue: false,
     batchesRun: 0,
     totalMatched: 0,
     totalNoMatch: 0,
