@@ -147,9 +147,9 @@ async function apiFetch(path, options = {}) {
   } catch (err) {
     // fetch() itself throws on a true network failure (DNS, connection
     // refused, offline) -- this used to be uncaught, which for the bulk
-    // crawler meant runBulkBackfill's promise just rejected silently
-    // (caught only by the top-level .catch(console.error) on the message
-    // handler), leaving bulkState stuck at "running" forever with no
+    // crawler meant processNextBulkCandidate's promise just rejected
+    // silently (caught only by the top-level .catch(console.error) on the
+    // alarm listener), leaving bulkState stuck at "running" forever with no
     // error ever shown in the UI.
     return { error: `network_error: ${(err && err.message) || err}` };
   }
@@ -269,66 +269,53 @@ async function setBulkCursor(value) {
 }
 
 // LinkedIn flagged this account for automated profile access after an
-// unattended overnight autoContinue run (a real security checkpoint, not
-// just a rate-limit page) -- this caps every LinkedIn-visiting entry point
-// (a fresh batch, or a recheck) to at most BULK_RATE_LIMIT_MAX_BATCHES
-// within a rolling BULK_RATE_LIMIT_WINDOW_MS, persisted in storage so it
-// holds across service-worker restarts, not just in-memory for one run.
-// Enforced here in the background script -- not just by disabling the
-// Automatic radio in bulk-backfill.html -- so it can't be bypassed by
-// re-enabling that control by hand.
-const BULK_BATCH_TIMESTAMPS_KEY = 'bulkBackfillBatchTimestamps';
-const BULK_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
-const BULK_RATE_LIMIT_MAX_BATCHES = 2;
+// unattended overnight run (a real security checkpoint, not just a
+// rate-limit page). Rather than a short cooldown between bursts of
+// back-to-back activity, a whole batch is paced across BULK_SPREAD_DURATION_MS
+// -- randomized gaps averaging a few candidates an hour, not a script
+// hammering through 25 people in minutes. That pacing IS the safety
+// mechanism now (replacing an earlier, stricter "2 batches per 15 minutes"
+// cooldown that also just disabled Automatic mode outright), which is why
+// Automatic mode is safe to leave enabled below.
+const BULK_SPREAD_DURATION_MS = 12 * 60 * 60 * 1000;
+const BULK_ALARM_NAME = 'bulkBackfillNextCandidate';
 
-async function getRecentBulkBatchTimestamps() {
-  const stored = await chrome.storage.local.get([BULK_BATCH_TIMESTAMPS_KEY]);
-  const all = stored[BULK_BATCH_TIMESTAMPS_KEY] || [];
-  const cutoff = Date.now() - BULK_RATE_LIMIT_WINDOW_MS;
-  return all.filter((t) => t > cutoff);
+// The very first candidate of a freshly (re)started batch fires quickly --
+// reads as someone clicking Start and it actually doing something, not a
+// dead page. Every candidate after that is what actually gets spread across
+// BULK_SPREAD_DURATION_MS: average gap = duration / (batchSize - 1) so the
+// last candidate lands near the end of the window, randomized +-50% so
+// consecutive gaps don't look machine-timed.
+function bulkFirstCandidateDelayMs() {
+  return 3000 + Math.random() * 12000;
 }
 
-async function recordBulkBatchStart(recent) {
-  await chrome.storage.local.set({ [BULK_BATCH_TIMESTAMPS_KEY]: [...recent, Date.now()] });
+function bulkNextCandidateDelayMs(batchSize) {
+  const gaps = Math.max(batchSize - 1, 1);
+  const avgGapMs = BULK_SPREAD_DURATION_MS / gaps;
+  return avgGapMs * (0.5 + Math.random());
 }
 
-// Returns an error string if starting now would exceed the rate limit,
-// or null if it's fine to proceed (and records this attempt as one of
-// the allowed ones).
-async function checkAndRecordBulkRateLimit() {
-  const recent = await getRecentBulkBatchTimestamps();
-  if (recent.length >= BULK_RATE_LIMIT_MAX_BATCHES) {
-    const waitMs = BULK_RATE_LIMIT_WINDOW_MS - (Date.now() - Math.min(...recent));
-    const waitMin = Math.max(1, Math.ceil(waitMs / 60000));
-    return `Paused for safety: already started ${BULK_RATE_LIMIT_MAX_BATCHES} LinkedIn-visiting runs in the last 15 minutes (LinkedIn flagged this account for automated access once already) -- wait ${waitMin} more minute(s) before trying again.`;
-  }
-  await recordBulkBatchStart(recent);
-  return null;
+// bulkState otherwise lives only in the service worker's memory -- and with
+// candidates now spread minutes-to-hours apart, the worker WILL be killed by
+// Chrome and restarted between almost every single one (MV3 workers die
+// after ~30s idle regardless of scheduled future work). This single storage
+// key is the actual source of truth the whole run resumes from on every
+// wake-up, not just a display snapshot for after a reload.
+const BULK_RUN_STATE_KEY = 'bulkBackfillRunState';
+
+function defaultBulkRunState() {
+  return {
+    running: false, stopRequested: false, mode: 'sweep', candidates: [], queue: [],
+    processedCount: 0, total: 0, cursor: 0, limit: 25, autoContinue: false,
+    batchesRun: 0, totalMatched: 0, totalNoMatch: 0, totalErrors: 0,
+    sweepComplete: false, lastError: null, nextRunAt: null,
+  };
 }
 
-// bulkState otherwise lives only in the service worker's memory -- a
-// reload or browser restart wipes it, taking the currently-displayed
-// batch (and anything Recheck could act on) with it even though the
-// crawl itself already finished cleanly. Snapshotting the batch (not the
-// live "is it running" flag, which is never true again after a reload)
-// lets the page restore exactly what it showed before.
-const BULK_BATCH_SNAPSHOT_KEY = 'bulkBackfillBatchSnapshot';
-
-function persistBulkBatchSnapshot() {
-  const {
-    candidates, total, processedCount, batchesRun,
-    totalMatched, totalNoMatch, totalErrors, autoContinue, sweepComplete, lastError,
-  } = bulkState;
-  chrome.storage.local.set({
-    [BULK_BATCH_SNAPSHOT_KEY]: {
-      candidates, total, processedCount, batchesRun, totalMatched, totalNoMatch, totalErrors, autoContinue, sweepComplete, lastError,
-    },
-  }).catch(() => {});
-}
-
-async function getBulkBatchSnapshot() {
-  const stored = await chrome.storage.local.get([BULK_BATCH_SNAPSHOT_KEY]);
-  return stored[BULK_BATCH_SNAPSHOT_KEY] || null;
+async function getBulkRunState() {
+  const stored = await chrome.storage.local.get([BULK_RUN_STATE_KEY]);
+  return stored[BULK_RUN_STATE_KEY] || defaultBulkRunState();
 }
 
 // The results table only ever shows the CURRENT/last batch (bulkState.candidates
@@ -1003,22 +990,39 @@ async function resolveNameMatch(nameMatches, candidate, tab) {
   return { resolved: false, reason: nameMatches.length > BATCH_SIZE * batchCount ? `checked ${batchCount * BATCH_SIZE} of ${nameMatches.length} name matches` : 'no confident match' };
 }
 
-let bulkState = {
-  running: false, candidates: [], processedCount: 0, total: 0, stopRequested: false, cursor: 0,
-  autoContinue: false, batchesRun: 0, totalMatched: 0, totalNoMatch: 0, totalErrors: 0, sweepComplete: false,
-  lastError: null,
-};
+// Reassigned to a freshly-loaded getBulkRunState() at the start of every
+// alarm wake-up (see processNextBulkCandidate below) -- this module-level
+// variable is just the current invocation's working copy, not something
+// that survives between candidates the way it used to when one run held
+// a single tab open end to end.
+let bulkState = defaultBulkRunState();
+
+// True for the whole span of an active processCandidate() call. Chrome
+// extension message/alarm handlers interleave on one JS thread -- a
+// candidate's search can be mid-await for tens of seconds, during which a
+// STOP click (or another alarm/message) can run its own handler. Confirmed
+// live: if that handler reassigns bulkState (bulkState = await
+// getBulkRunState()) while a candidate is still in flight, the in-flight
+// call's LATER mutations (candidate.status = 'matched', totalMatched += 1)
+// apply through its closure over bulkState -- which by then points at the
+// NEW object -- so the tally increments on one object while the actual
+// candidate.status change lands on the orphaned old one and is never
+// persisted again. (totalMatched: 1 with every candidate stuck on
+// 'pending' was exactly this.) Everything that would otherwise reassign
+// bulkState mid-flight checks this flag first and mutates the SAME live
+// object in place instead.
+let bulkOperationInFlight = false;
 
 function broadcastBulkProgress() {
   // No listener (bulk-backfill.html not open) just means this rejects --
   // the crawl itself doesn't depend on anyone watching.
   chrome.runtime.sendMessage({ type: 'BULK_BACKFILL_PROGRESS', payload: bulkState }).catch(() => {});
-  persistBulkBatchSnapshot();
+  chrome.storage.local.set({ [BULK_RUN_STATE_KEY]: bulkState }).catch(() => {});
 }
 
 // Searches LinkedIn for one candidate and resolves (or doesn't) a match,
 // mutating candidate.status/detail and bulkState's running totals in
-// place. Shared by the main sweep loop and recheckUnresolved() below --
+// place. Shared by processNextBulkCandidate (sweep and recheck alike) --
 // re-running just the current batch's failures after a matching-logic fix
 // needs exactly this same per-candidate flow, not a second copy of it.
 async function processCandidate(tab, candidate) {
@@ -1087,160 +1091,233 @@ async function processCandidate(tab, candidate) {
 // sweep cursor or re-fetching from Curatal. Exists so a matching-logic fix
 // can be verified against exactly the cases that just failed, and so
 // candidates that would otherwise only get a second look after a full
-// cursor reset aren't left stranded until then.
-async function recheckUnresolved() {
-  if (bulkState.running) return { ok: false, error: 'already_running' };
-  const targets = bulkState.candidates.filter((c) => c.status === 'no_match' || c.status === 'error');
+// cursor reset aren't left stranded until then. `queue` holds references to
+// those specific candidate objects (a subset of bulkState.candidates, not a
+// copy) -- processCandidate mutates them in place, so the full batch stays
+// visible in the results table throughout, same as before. Deliberately
+// autoContinue:false regardless of the sweep's setting -- a recheck is a
+// one-off, deliberate re-pass, not something that should chain into
+// fetching a whole new batch from Curatal on its own.
+async function startBulkRecheck() {
+  if (bulkOperationInFlight) return { ok: false, error: 'already_running' };
+  const existing = await getBulkRunState();
+  if (existing.running) return { ok: false, error: 'already_running' };
+  const targets = existing.candidates.filter((c) => c.status === 'no_match' || c.status === 'error');
   if (!targets.length) return { ok: false, error: 'nothing_to_recheck' };
 
-  const rateLimitError = await checkAndRecordBulkRateLimit();
-  if (rateLimitError) return { ok: false, error: rateLimitError };
-
-  bulkState.running = true;
-  bulkState.stopRequested = false;
-  bulkState.total = targets.length;
-  bulkState.processedCount = 0;
   targets.forEach((c) => {
-    if (c.status === 'matched') bulkState.totalMatched -= 1;
-    else if (c.status === 'no_match') bulkState.totalNoMatch -= 1;
-    else if (c.status === 'error') bulkState.totalErrors -= 1;
+    if (c.status === 'matched') existing.totalMatched -= 1;
+    else if (c.status === 'no_match') existing.totalNoMatch -= 1;
+    else if (c.status === 'error') existing.totalErrors -= 1;
     c.status = 'pending';
     c.detail = '';
   });
-  broadcastBulkProgress();
 
-  const tab = await chrome.tabs.create({ url: 'about:blank', active: false });
-  for (let i = 0; i < targets.length; i += 1) {
-    if (bulkState.stopRequested) break;
-    bulkState.processedCount = i + 1;
-    // eslint-disable-next-line no-await-in-loop
-    await processCandidate(tab, targets[i]);
-    // eslint-disable-next-line no-await-in-loop
-    await sleep(4000 + Math.random() * 3000);
-  }
-  await chrome.tabs.remove(tab.id).catch(() => {});
-  bulkState.running = false;
+  bulkState = {
+    ...existing,
+    running: true,
+    stopRequested: false,
+    mode: 'recheck',
+    queue: targets,
+    total: targets.length,
+    processedCount: 0,
+    autoContinue: false,
+    lastError: null,
+  };
   broadcastBulkProgress();
+  await scheduleNextBulkCandidate();
   return { ok: true };
 }
 
-// Searches LinkedIn once per candidate (one dedicated background tab,
-// reused and re-navigated -- not one tab per candidate, so this reads as
-// one person browsing sequentially rather than a burst of parallel
-// activity), and only attaches a LinkedIn URL when a result's name AND
-// current-company headline both agree with what's already in Curatal.
-// Anything less certain -- no results, multiple plausible matches, a name
-// match with no company match -- is left alone rather than guessed.
-//
-// autoContinue: false (manual) processes exactly one batch of `limit`
-// candidates and stops, same as clicking Start again yourself for the next
-// one. true (automatic) keeps fetching and processing consecutive batches
-// -- using the same cursor-advance-then-process order, so a Stop click or
-// a crash mid-batch still leaves the cursor past everything already
-// completed -- until either Stop is clicked or a fetch comes back with no
-// candidates left (the whole list has been swept).
-async function runBulkBackfill({ limit }) {
-  if (bulkState.running) return;
-  // Claimed synchronously, before any await below -- checkAndRecordBulkRateLimit()
-  // and getBulkCursor() both hit chrome.storage, which yields to the event
-  // loop. Without claiming it here, a second START_BULK_BACKFILL arriving in
-  // that window would also pass the guard above (bulkState.running was still
-  // false) and, once it reached the reassignment below, overwrite bulkState
-  // with a fresh stopRequested:false -- silently reviving a crawl that had
-  // just been told to stop.
-  bulkState.running = true;
+// Entry point for the Start button. Fetches the first batch, then hands off
+// to the alarm-driven engine below -- this function itself returns almost
+// immediately (the message handler doesn't wait around for a whole run),
+// same as clicking Start always felt like, even though the run itself now
+// takes hours.
+async function startBulkSweep({ limit, autoContinue }) {
+  if (bulkOperationInFlight) return;
+  const existing = await getBulkRunState();
+  if (existing.running) return;
 
-  const rateLimitError = await checkAndRecordBulkRateLimit();
-  if (rateLimitError) {
+  const cursor = await getBulkCursor();
+  bulkState = {
+    ...defaultBulkRunState(),
+    running: true,
+    mode: 'sweep',
+    cursor,
+    limit,
+    autoContinue: !!autoContinue,
+  };
+  broadcastBulkProgress();
+  await advanceToNextBulkBatch();
+}
+
+async function stopBulk() {
+  await chrome.alarms.clear(BULK_ALARM_NAME);
+  // Only safe to reload a fresh copy when nothing's actively processing --
+  // otherwise this would orphan that in-flight call's eventual mutations
+  // (see bulkOperationInFlight above). When something IS in flight, mutate
+  // the exact same live object it's already holding instead.
+  if (!bulkOperationInFlight) {
+    bulkState = await getBulkRunState();
+  }
+  bulkState.stopRequested = true;
+  bulkState.running = false;
+  bulkState.nextRunAt = null;
+  broadcastBulkProgress();
+}
+
+// Fetches the next batch of `limit` candidates from Curatal and queues it up
+// (sweep mode only -- called both for the very first batch and, if
+// autoContinue is on, every time one batch finishes and the run chains into
+// the next). candidates and queue are the SAME array here (unlike recheck,
+// which processes a subset) -- the whole freshly-fetched batch is the queue.
+async function advanceToNextBulkBatch() {
+  const result = await fetchMissingLinkedinCandidates(bulkState.limit, bulkState.cursor);
+  if (result.error || !result.candidates) {
+    // Fetching the candidate list itself failed (auth, network, gateway
+    // routing, backend error) -- surface it instead of silently reverting
+    // to "not started", which looked indistinguishable from never having
+    // clicked Start at all.
     bulkState.running = false;
-    bulkState.lastError = rateLimitError;
+    bulkState.nextRunAt = null;
+    bulkState.lastError = result.error || 'missing_linkedin_fetch_failed';
+    broadcastBulkProgress();
+    return;
+  }
+  if (!result.candidates.length) {
+    bulkState.running = false;
+    bulkState.nextRunAt = null;
+    bulkState.sweepComplete = true;
     broadcastBulkProgress();
     return;
   }
 
-  const cursor = await getBulkCursor();
-  bulkState = {
-    running: true,
-    candidates: [],
-    processedCount: 0,
-    total: 0,
-    stopRequested: false,
-    cursor,
-    // Automatic mode is disabled for now (see bulk-backfill.html) --
-    // continuous unattended runs are what got this LinkedIn account
-    // flagged with a security checkpoint, so this ignores whatever the
-    // request asked for and always stops after one batch.
-    autoContinue: false,
-    batchesRun: 0,
-    totalMatched: 0,
-    totalNoMatch: 0,
-    totalErrors: 0,
-    sweepComplete: false,
-    lastError: null,
-  };
-  broadcastBulkProgress();
+  // Advance the cursor immediately, not after the batch finishes -- so
+  // stopping partway through (or the worker never getting a chance to run
+  // again) still leaves forward progress for next time instead of
+  // re-fetching the same page.
+  await setBulkCursor(result.nextAfter);
+  bulkState.cursor = result.nextAfter;
+  bulkState.batchesRun += 1;
+  bulkState.candidates = result.candidates.map((c) => ({ ...c, status: 'pending', detail: '' }));
+  bulkState.queue = bulkState.candidates;
+  bulkState.total = bulkState.queue.length;
+  bulkState.processedCount = 0;
+  await scheduleNextBulkCandidate();
+}
 
-  const tab = await chrome.tabs.create({ url: 'about:blank', active: false });
-
-  for (;;) {
-    // eslint-disable-next-line no-await-in-loop
-    const result = await fetchMissingLinkedinCandidates(limit, bulkState.cursor);
-    if (result.error || !result.candidates) {
-      // Fetching the candidate list itself failed (auth, network, gateway
-      // routing, backend error) -- surface it instead of silently reverting
-      // to "not started", which looked indistinguishable from never having
-      // clicked Start at all.
-      bulkState.lastError = result.error || 'missing_linkedin_fetch_failed';
-      break;
-    }
-    if (!result.candidates.length) {
-      bulkState.sweepComplete = true;
-      break;
-    }
-
-    // Advance the cursor immediately, not after the batch finishes -- so
-    // stopping partway through (or a crash) still leaves forward progress
-    // for next time instead of re-fetching the same page.
-    // eslint-disable-next-line no-await-in-loop
-    await setBulkCursor(result.nextAfter);
-    bulkState.cursor = result.nextAfter;
-    bulkState.batchesRun += 1;
-
-    bulkState.candidates = result.candidates.map((c) => ({ ...c, status: 'pending', detail: '' }));
-    bulkState.total = bulkState.candidates.length;
-    bulkState.processedCount = 0;
-    broadcastBulkProgress();
-
-  for (let i = 0; i < bulkState.candidates.length; i += 1) {
-    if (bulkState.stopRequested) break;
-    bulkState.processedCount = i + 1;
-    // eslint-disable-next-line no-await-in-loop
-    await processCandidate(tab, bulkState.candidates[i]);
-    // Randomized pause between candidates -- reads as a human looking at
-    // each result, not a script hammering LinkedIn back-to-back.
-    // eslint-disable-next-line no-await-in-loop
-    await sleep(4000 + Math.random() * 3000);
-  }
-
-    if (!bulkState.autoContinue || bulkState.stopRequested) break;
-  }
-
-  await chrome.tabs.remove(tab.id).catch(() => {});
-  bulkState.running = false;
+async function scheduleNextBulkCandidate() {
+  const delayMs = bulkState.processedCount === 0
+    ? bulkFirstCandidateDelayMs()
+    : bulkNextCandidateDelayMs(bulkState.queue.length);
+  bulkState.nextRunAt = Date.now() + delayMs;
+  chrome.alarms.create(BULK_ALARM_NAME, { when: bulkState.nextRunAt });
   broadcastBulkProgress();
 }
+
+// The actual unit of work a wake-up performs: one candidate, then either
+// schedule the next one, chain into a fresh batch (sweep + autoContinue), or
+// stop. Always starts by reloading state from storage -- the module-level
+// bulkState from whatever processed the PREVIOUS candidate is long gone,
+// the worker that held it was killed once it went idle.
+async function processNextBulkCandidate() {
+  // Defensive: shouldn't normally happen for a single named one-shot alarm,
+  // but if it ever did fire twice (or overlapped a resumed alarm), this is
+  // exactly the kind of overlap that caused the bulkState-reassignment race
+  // above -- bail rather than start a second concurrent candidate.
+  if (bulkOperationInFlight) return;
+
+  bulkState = await getBulkRunState();
+  if (!bulkState.running || bulkState.stopRequested) {
+    bulkState.running = false;
+    bulkState.nextRunAt = null;
+    broadcastBulkProgress();
+    return;
+  }
+
+  if (bulkState.processedCount >= bulkState.queue.length) {
+    if (bulkState.mode === 'sweep' && bulkState.autoContinue) {
+      await advanceToNextBulkBatch();
+    } else {
+      bulkState.running = false;
+      bulkState.nextRunAt = null;
+      broadcastBulkProgress();
+    }
+    return;
+  }
+
+  const candidate = bulkState.queue[bulkState.processedCount];
+  bulkOperationInFlight = true;
+  try {
+    const tab = await chrome.tabs.create({ url: 'about:blank', active: false });
+    await processCandidate(tab, candidate);
+    await chrome.tabs.remove(tab.id).catch(() => {});
+  } finally {
+    bulkOperationInFlight = false;
+  }
+  bulkState.processedCount += 1;
+
+  if (bulkState.stopRequested || !bulkState.running) {
+    bulkState.running = false;
+    bulkState.nextRunAt = null;
+    broadcastBulkProgress();
+    return;
+  }
+
+  if (bulkState.processedCount >= bulkState.queue.length) {
+    if (bulkState.mode === 'sweep' && bulkState.autoContinue) {
+      await advanceToNextBulkBatch();
+    } else {
+      bulkState.running = false;
+      bulkState.nextRunAt = null;
+      broadcastBulkProgress();
+    }
+    return;
+  }
+
+  await scheduleNextBulkCandidate();
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === BULK_ALARM_NAME) {
+    processNextBulkCandidate().catch((err) => console.error('[bulk] alarm step failed', err));
+  }
+});
+
+// A pending chrome.alarms alarm is the only thing keeping a run alive
+// between candidates -- if it's gone (the extension was reloaded in
+// chrome://extensions during dev, or Chrome itself restarted) while
+// bulkState still says running:true, the run would otherwise silently
+// stall for however many hours are left with nothing to wake it back up.
+// Runs on both onStartup (browser relaunch) and onInstalled (extension
+// reload/update), and reschedules from wherever nextRunAt says next,
+// firing soon instead if that time already passed while nobody was around.
+async function resumeBulkAlarmIfNeeded() {
+  const state = await getBulkRunState();
+  if (!state.running) return;
+  const alarm = await chrome.alarms.get(BULK_ALARM_NAME);
+  if (alarm) return;
+  const when = state.nextRunAt && state.nextRunAt > Date.now() ? state.nextRunAt : Date.now() + 5000;
+  chrome.alarms.create(BULK_ALARM_NAME, { when });
+}
+
+chrome.runtime.onStartup.addListener(() => {
+  resumeBulkAlarmIfNeeded().catch((err) => console.error('[bulk] resume on startup failed', err));
+});
 
 // Reloading the extension in chrome://extensions only replaces this
 // background script -- an already-open bulk-backfill.html tab keeps
 // running its OLD page code and never re-asks for status, so it looks
-// dead/stuck even though the new background script (with the restored
-// batch snapshot) is right there waiting to answer it. Auto-refresh any
-// such open tab so the fix above actually reaches the screen without a
-// manual F5 the user has to remember every time.
+// dead/stuck even though the new background script is right there waiting
+// to answer it. Auto-refresh any such open tab so the fix above actually
+// reaches the screen without a manual F5 the user has to remember every
+// time, and make sure a mid-run alarm survived the reload (see above).
 chrome.runtime.onInstalled.addListener(() => {
   chrome.tabs.query({ url: `${chrome.runtime.getURL('bulk-backfill.html')}*` })
     .then((tabs) => tabs.forEach((t) => chrome.tabs.reload(t.id)))
     .catch(() => {});
+  resumeBulkAlarmIfNeeded().catch((err) => console.error('[bulk] resume on install failed', err));
 });
 
 // Without this, clicking the toolbar icon does nothing (there's no
@@ -1254,62 +1331,38 @@ chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => 
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'START_BULK_BACKFILL') {
-    runBulkBackfill(message.payload).catch((err) => console.error('[bulk] crawl failed', err));
+    startBulkSweep(message.payload).catch((err) => console.error('[bulk] crawl failed', err));
     sendResponse({ ok: true });
     return false;
   }
   if (message.type === 'STOP_BULK_BACKFILL') {
-    // stopRequested is only polled at loop-iteration boundaries (between
-    // candidates, between profile-visit batches), not inside each visit's
-    // await -- honoring it can take up to one full candidate's worth of
-    // LinkedIn navigation. Broadcasting right away, before that, is what
-    // lets the page show "stopping" instead of looking like the click did
-    // nothing until the in-flight candidate finally finishes.
-    bulkState.stopRequested = true;
-    broadcastBulkProgress();
-    sendResponse({ ok: true });
-    return false;
+    // Unlike the old back-to-back loop, there's almost never an in-flight
+    // candidate to interrupt -- candidates are now minutes-to-hours apart,
+    // so stopping is just: cancel the pending alarm so the next one never
+    // fires. stopBulk() persists+broadcasts running:false immediately.
+    stopBulk().then(() => sendResponse({ ok: true }));
+    return true;
   }
   if (message.type === 'GET_BULK_BACKFILL_STATUS') {
-    // bulkState only reflects this cursor/batch once a crawl has actually
-    // run in this service-worker lifetime -- a reload or browser restart
-    // wipes it even though the crawl finished cleanly. Restore the
-    // persisted cursor and last batch snapshot into bulkState itself
-    // (not just the response) so the page shows where things stood and
-    // Recheck can still act on it.
-    if (!bulkState.running && !bulkState.candidates.length) {
-      Promise.all([getBulkCursor(), getBulkBatchSnapshot()]).then(([cursor, snapshot]) => {
-        bulkState.cursor = cursor;
-        if (snapshot) Object.assign(bulkState, snapshot);
-        sendResponse({ ...bulkState });
-      });
-    } else {
-      sendResponse({ ...bulkState });
-    }
+    getBulkRunState().then((state) => sendResponse(state));
     return true;
   }
   if (message.type === 'RESET_BULK_CURSOR') {
-    // Clearing storage alone isn't enough -- if a prior reload already
-    // restored a snapshot into the live bulkState (see
-    // GET_BULK_BACKFILL_STATUS above), bulkState.candidates.length is
-    // nonzero, which skips that restore-from-storage branch on every later
-    // status poll. The page then keeps getting this stale in-memory batch
-    // echoed back, making Reset look like it did nothing even though
-    // storage was cleared correctly.
-    if (!bulkState.running) {
-      bulkState.candidates = [];
-      bulkState.cursor = 0;
-      bulkState.total = 0;
-      bulkState.processedCount = 0;
-      bulkState.batchesRun = 0;
-      bulkState.totalMatched = 0;
-      bulkState.totalNoMatch = 0;
-      bulkState.totalErrors = 0;
-      bulkState.sweepComplete = false;
+    // The UI already disables this button while running, but don't trust
+    // that alone -- reassigning bulkState here while a candidate is
+    // actively in flight would hit the same orphaned-object race described
+    // above bulkOperationInFlight's declaration.
+    if (bulkOperationInFlight) {
+      sendResponse({ ok: false, error: 'already_running' });
+      return false;
     }
-    setBulkCursor(0)
-      .then(() => chrome.storage.local.remove([BULK_BATCH_SNAPSHOT_KEY, BULK_ALL_RESULTS_KEY]))
-      .then(() => sendResponse({ ok: true }));
+    Promise.all([
+      setBulkCursor(0),
+      chrome.storage.local.remove([BULK_RUN_STATE_KEY, BULK_ALL_RESULTS_KEY]),
+    ]).then(() => {
+      bulkState = defaultBulkRunState();
+      sendResponse({ ok: true });
+    });
     return true;
   }
   if (message.type === 'GET_BULK_REPORT') {
@@ -1319,7 +1372,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
   if (message.type === 'RECHECK_UNRESOLVED') {
-    recheckUnresolved().then(sendResponse).catch((err) => sendResponse({ ok: false, error: String((err && err.message) || err) }));
+    startBulkRecheck().then(sendResponse).catch((err) => sendResponse({ ok: false, error: String((err && err.message) || err) }));
     return true;
   }
   if (message.type === 'LOGIN') {

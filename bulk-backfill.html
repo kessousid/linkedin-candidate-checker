@@ -43,15 +43,18 @@
     <strong>Education</strong> into the mix (a profile now counts if either signal agrees), which can pull apart
     an ambiguous pair or catch a stale company. Still unresolved? Moves to the next 3 name-matches and repeats —
     up to 2 batches (6 profiles) per candidate. Anything still uncertain after that is left alone rather than
-    guessed. Runs one candidate at a time with pauses in between (not a burst of requests), and keeps running in
-    the background even if you close this tab. Note: visiting full profiles (not just search results) counts
-    against LinkedIn's monthly profile-view limit for non-premium accounts more than searching alone does.
+    guessed. Each batch is spread across roughly 12 hours -- randomized gaps averaging a few candidates an
+    hour, not a burst of requests -- to read as occasional human lookups rather than a script; this is what
+    keeps LinkedIn from flagging the account again, so there's no faster setting. Keeps running in the
+    background even if you close this tab, reload the extension, or restart the browser (it picks back up
+    from where it left off). Note: visiting full profiles (not just search results) counts against LinkedIn's
+    monthly profile-view limit for non-premium accounts more than searching alone does.
   </p>
 
   <div class="controls">
     <label>Batch size: <input type="number" id="limitInput" value="25" min="1" max="500" /></label>
     <label><input type="radio" name="mode" id="modeManual" value="manual" checked /> Manual (one batch, click Start again for the next)</label>
-    <label style="color:#999"><input type="radio" name="mode" id="modeAuto" value="auto" disabled /> Automatic -- disabled for now (see warning below)</label>
+    <label><input type="radio" name="mode" id="modeAuto" value="auto" /> Automatic (chains straight into the next batch once one finishes)</label>
     <button id="startBtn">Start</button>
     <button id="stopBtn" class="secondary" disabled>Stop</button>
     <button id="resetCursorBtn" class="secondary">Reset to first batch</button>
@@ -59,10 +62,11 @@
     <button id="downloadReportBtn" class="secondary">Download report (CSV)</button>
   </div>
   <p class="hint">"Recheck no-matches" re-runs just the candidates from the batch below that came back
-    no_match/error, in place -- no re-fetch from Curatal, no change to the resume cursor. Use it after a
-    matching-logic fix, or just to give a borderline case a second pass. "Download report" exports every
+    no_match/error, in place -- no re-fetch from Curatal, no change to the resume cursor, and (unlike Start)
+    doesn't chain into a new batch afterward even in Automatic mode. Same ~12-hour pacing applies. Use it after
+    a matching-logic fix, or just to give a borderline case a second pass. "Download report" exports every
     candidate processed since the last "Reset to first batch" (not just the batch showing below) -- the
-    way to see a full night's automatic run the next morning.</p>
+    way to see a full run's results once it's done.</p>
 
   <div id="cursorText" class="hint"></div>
   <div id="progressText"></div>

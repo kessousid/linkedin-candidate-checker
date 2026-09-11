@@ -2,9 +2,29 @@ function el(id) {
   return document.getElementById(id);
 }
 
+// Candidates are now minutes-to-hours apart (see background.js's alarm-driven
+// pacing) -- most of the time nothing is actively happening, just waiting for
+// the next scheduled candidate. lastState + the interval below keep the ETA
+// text ("in about N minutes") counting down even though no new
+// BULK_BACKFILL_PROGRESS message arrives until something actually changes.
+let lastState = null;
+
+function formatEta(nextRunAt) {
+  if (!nextRunAt) return 'soon';
+  const msLeft = nextRunAt - Date.now();
+  const when = new Date(nextRunAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (msLeft <= 60000) return `any moment now (around ${when})`;
+  const mins = Math.round(msLeft / 60000);
+  if (mins < 60) return `in about ${mins} minute${mins === 1 ? '' : 's'} (around ${when})`;
+  const hours = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return `in about ${hours}h ${remMins}m (around ${when})`;
+}
+
 function renderState(state) {
+  lastState = state;
   const {
-    candidates, running, processedCount, total, cursor, stopRequested,
+    candidates, running, processedCount, total, cursor, stopRequested, mode, nextRunAt,
     autoContinue, batchesRun, totalMatched, totalNoMatch, totalErrors, sweepComplete, lastError,
   } = state;
   el('startBtn').disabled = running;
@@ -15,17 +35,15 @@ function renderState(state) {
   el('modeAuto').disabled = running;
   el('recheckBtn').disabled = running || !(candidates || []).some((c) => c.status === 'no_match' || c.status === 'error');
 
-  el('cursorText').textContent = `Next batch resumes after candidate id ${cursor || 0} — click "Reset to first batch" to start over from the beginning.`;
+  el('cursorText').textContent = `Next fresh batch resumes after candidate id ${cursor || 0} — click "Reset to first batch" to start over from the beginning.`;
 
   if (!candidates || !candidates.length) {
     if (sweepComplete) {
       el('progressText').textContent = `Done — reached the end of the list. ${batchesRun || 0} batch(es) run this session: ${totalMatched || 0} matched, ${totalNoMatch || 0} no confident match, ${totalErrors || 0} errors.`;
-    } else if (lastError && lastError.startsWith('Paused for safety') && !running) {
-      el('progressText').textContent = lastError;
     } else if (lastError && !running) {
       el('progressText').textContent = `Couldn't fetch candidates from Curatal: ${lastError}. Check you're logged in (Settings) and try Start again.`;
     } else if (running && stopRequested) {
-      el('progressText').textContent = 'Stopping — finishing the candidate currently in progress, then will halt (can take a minute or so, not stuck)…';
+      el('progressText').textContent = 'Stopping — finishing the candidate currently in progress, then will halt…';
     } else {
       el('progressText').textContent = running ? 'Fetching candidates…' : 'Not started yet.';
     }
@@ -36,16 +54,29 @@ function renderState(state) {
   const batchMatched = candidates.filter((c) => c.status === 'matched').length;
   const batchNoMatch = candidates.filter((c) => c.status === 'no_match').length;
   const batchErrors = candidates.filter((c) => c.status === 'error').length;
+  // A candidate object sits at 'searching' only for the few seconds to a
+  // couple minutes it's actually being checked -- the rest of the (much
+  // longer) gap between candidates, none of them are, which is what tells
+  // the waiting-for-next-alarm branch below apart from actively-working.
+  const activelyProcessing = candidates.some((c) => c.status === 'searching');
 
   const overallSuffix = autoContinue
     ? ` — running total across ${batchesRun || 1} batch(es): ${totalMatched || 0} matched, ${totalNoMatch || 0} no confident match, ${totalErrors || 0} errors`
     : '';
+  const batchLabel = mode === 'recheck' ? 'Recheck' : `Batch ${batchesRun || 1}`;
+  const tallySuffix = `(${batchMatched} matched, ${batchNoMatch} no confident match, ${batchErrors} errors so far)${overallSuffix}`;
 
-  const stoppingPrefix = running && stopRequested ? 'Stopping (finishing current candidate, can take a minute)… ' : '';
-
-  el('progressText').textContent = running
-    ? `${stoppingPrefix}Batch ${batchesRun || 1}: processing ${processedCount} of ${total}… (${batchMatched} matched, ${batchNoMatch} no confident match, ${batchErrors} errors so far this batch)${overallSuffix}`
-    : `Batch ${batchesRun || 1} done: ${processedCount} of ${total} processed (${batchMatched} matched, ${batchNoMatch} no confident match, ${batchErrors} errors)${overallSuffix}.`;
+  let statusLine;
+  if (!running) {
+    statusLine = `${batchLabel} done: ${processedCount} of ${total} processed ${tallySuffix}.`;
+  } else if (stopRequested) {
+    statusLine = `Stopping (finishing the current candidate, can take a minute)… ${batchLabel}: ${processedCount} of ${total} done so far.`;
+  } else if (activelyProcessing) {
+    statusLine = `${batchLabel}: actively checking candidate ${processedCount + 1} of ${total} right now… ${tallySuffix}`;
+  } else {
+    statusLine = `${batchLabel}: ${processedCount} of ${total} done so far ${tallySuffix} — next candidate ${formatEta(nextRunAt)}. Paced to avoid triggering LinkedIn's bot detection again; this tab doesn't need to stay open while it waits.`;
+  }
+  el('progressText').textContent = statusLine;
 
   el('resultsTable').style.display = '';
   el('resultsBody').innerHTML = candidates.map((c) => `<tr>
@@ -57,6 +88,13 @@ function renderState(state) {
     <td>${c.detail || ''}</td>
   </tr>`).join('');
 }
+
+// Re-render every 30s off the last-known state, purely so the "next
+// candidate in about N minutes" countdown keeps ticking down while this tab
+// sits open across a long gap with no new BULK_BACKFILL_PROGRESS message.
+setInterval(() => {
+  if (lastState && lastState.running) renderState(lastState);
+}, 30000);
 
 el('startBtn').addEventListener('click', async () => {
   const limit = parseInt(el('limitInput').value, 10) || 25;
