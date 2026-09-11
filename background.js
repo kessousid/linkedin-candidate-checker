@@ -1000,24 +1000,29 @@ let bulkState = defaultBulkRunState();
 // True for the whole span of an active processCandidate() call. Chrome
 // extension message/alarm handlers interleave on one JS thread -- a
 // candidate's search can be mid-await for tens of seconds, during which a
-// STOP click (or another alarm/message) can run its own handler. Confirmed
-// live: if that handler reassigns bulkState (bulkState = await
-// getBulkRunState()) while a candidate is still in flight, the in-flight
-// call's LATER mutations (candidate.status = 'matched', totalMatched += 1)
-// apply through its closure over bulkState -- which by then points at the
-// NEW object -- so the tally increments on one object while the actual
-// candidate.status change lands on the orphaned old one and is never
-// persisted again. (totalMatched: 1 with every candidate stuck on
-// 'pending' was exactly this.) Everything that would otherwise reassign
-// bulkState mid-flight checks this flag first and mutates the SAME live
-// object in place instead.
+// STOP click (or another alarm/message) can run its own handler. If that
+// handler reassigns bulkState (bulkState = await getBulkRunState()) while a
+// candidate is still in flight, the in-flight call's LATER mutations would
+// apply through its closure over bulkState -- which by then points at a
+// different object -- landing on something that never gets persisted.
+// (Not what caused the totalMatched:1-with-everything-pending bug, which
+// turned out to be the queue/candidates aliasing issue described above
+// advanceToNextBulkBatch -- but a real hazard in its own right once
+// multiple entry points can reassign the same mutable module-level
+// variable.) Everything that would otherwise reassign bulkState mid-flight
+// checks this flag first and mutates the SAME live object in place instead.
 let bulkOperationInFlight = false;
 
 function broadcastBulkProgress() {
   // No listener (bulk-backfill.html not open) just means this rejects --
   // the crawl itself doesn't depend on anyone watching.
   chrome.runtime.sendMessage({ type: 'BULK_BACKFILL_PROGRESS', payload: bulkState }).catch(() => {});
-  chrome.storage.local.set({ [BULK_RUN_STATE_KEY]: bulkState }).catch(() => {});
+  // A silently-swallowed failure here (the old bare .catch(() => {})) would
+  // leave a whole candidate's real result never persisted with no trace of
+  // why -- log it loudly instead, even though it's not expected to fire in
+  // normal operation.
+  chrome.storage.local.set({ [BULK_RUN_STATE_KEY]: bulkState })
+    .catch((err) => console.error('[bulk] storage.local.set failed', err));
 }
 
 // Searches LinkedIn for one candidate and resolves (or doesn't) a match,
@@ -1102,10 +1107,16 @@ async function startBulkRecheck() {
   if (bulkOperationInFlight) return { ok: false, error: 'already_running' };
   const existing = await getBulkRunState();
   if (existing.running) return { ok: false, error: 'already_running' };
-  const targets = existing.candidates.filter((c) => c.status === 'no_match' || c.status === 'error');
-  if (!targets.length) return { ok: false, error: 'nothing_to_recheck' };
+  // Indexes into existing.candidates, not the objects themselves or their
+  // candidateId -- see the note in advanceToNextBulkBatch for why.
+  const targetIndexes = [];
+  existing.candidates.forEach((c, i) => {
+    if (c.status === 'no_match' || c.status === 'error') targetIndexes.push(i);
+  });
+  if (!targetIndexes.length) return { ok: false, error: 'nothing_to_recheck' };
 
-  targets.forEach((c) => {
+  targetIndexes.forEach((i) => {
+    const c = existing.candidates[i];
     if (c.status === 'matched') existing.totalMatched -= 1;
     else if (c.status === 'no_match') existing.totalNoMatch -= 1;
     else if (c.status === 'error') existing.totalErrors -= 1;
@@ -1118,8 +1129,8 @@ async function startBulkRecheck() {
     running: true,
     stopRequested: false,
     mode: 'recheck',
-    queue: targets,
-    total: targets.length,
+    queue: targetIndexes,
+    total: targetIndexes.length,
     processedCount: 0,
     autoContinue: false,
     lastError: null,
@@ -1201,7 +1212,17 @@ async function advanceToNextBulkBatch() {
   bulkState.cursor = result.nextAfter;
   bulkState.batchesRun += 1;
   bulkState.candidates = result.candidates.map((c) => ({ ...c, status: 'pending', detail: '' }));
-  bulkState.queue = bulkState.candidates;
+  // queue holds INDEXES into bulkState.candidates, NOT object references --
+  // see the note above bulkOperationInFlight for why: bulkState round-trips
+  // through chrome.storage.local (JSON serialization) between almost every
+  // step, which silently breaks object-reference aliasing between two
+  // arrays that started out pointing at the same objects. A plain index
+  // survives that round-trip intact (array order/length is preserved even
+  // though object identity isn't). Index, not candidateId -- confirmed
+  // live, Curatal's missing-linkedin data can have several rows (different
+  // companies) share the same candidateId, which would collide under a
+  // find-by-id lookup.
+  bulkState.queue = bulkState.candidates.map((_, i) => i);
   bulkState.total = bulkState.queue.length;
   bulkState.processedCount = 0;
   await scheduleNextBulkCandidate();
@@ -1247,7 +1268,15 @@ async function processNextBulkCandidate() {
     return;
   }
 
-  const candidate = bulkState.queue[bulkState.processedCount];
+  const candidateIndex = bulkState.queue[bulkState.processedCount];
+  const candidate = bulkState.candidates[candidateIndex];
+  if (!candidate) {
+    // Shouldn't happen (every index in queue comes from candidates itself),
+    // but skip rather than get permanently stuck if it ever does.
+    bulkState.processedCount += 1;
+    await scheduleNextBulkCandidate();
+    return;
+  }
   bulkOperationInFlight = true;
   try {
     const tab = await chrome.tabs.create({ url: 'about:blank', active: false });
