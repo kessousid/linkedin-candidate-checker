@@ -58,12 +58,6 @@
     <button id="recheckBtn" class="secondary" disabled>Recheck no-matches</button>
     <button id="downloadReportBtn" class="secondary">Download report (CSV)</button>
   </div>
-  <p class="hint" style="color:#b3261e">
-    LinkedIn flagged this account for automated profile access after an unattended overnight run and showed a
-    security checkpoint. Automatic mode is disabled until that's confirmed cleared, and Start is limited to 2
-    batches per rolling 15 minutes (manual click each time) -- both enforced here and in the background script,
-    so this can't be bypassed by re-enabling the radio button by hand.
-  </p>
   <p class="hint">"Recheck no-matches" re-runs just the candidates from the batch below that came back
     no_match/error, in place -- no re-fetch from Curatal, no change to the resume cursor. Use it after a
     matching-logic fix, or just to give a borderline case a second pass. "Download report" exports every
