@@ -2,19 +2,19 @@
 // Keeping tokens here (rather than in popup.js/search-content-script.js)
 // means they never need to be read by anything other than this one place.
 //
-// This talks to the REAL Curatal Dev environment's own backend services --
-// never staging or production, that host isn't configurable anywhere in
-// this extension -- as a signed-in Platform Admin (Keycloak email+password
-// login, the same _login/_refresh-token shape CuratalApp's own client uses
-// for candidates: src/api/client.ts, src/api/environment.ts), not a plain
-// shared API key against a throwaway clone. Platform Admin specifically
-// (not Recruiter) -- confirmed live against C:\CuratalIT's source, it's
-// the one role accepted by both accounts_service's isrecruiterAuthorized()
+// The backend moved off Curatal Dev onto the staging environment (that
+// host isn't configurable anywhere in this extension) -- as a signed-in
+// Platform Admin (Keycloak email+password login, the same
+// _login/_refresh-token shape CuratalApp's own client uses for candidates:
+// src/api/client.ts, src/api/environment.ts), not a plain shared API key
+// against a throwaway clone. Platform Admin specifically (not Recruiter)
+// -- confirmed live against C:\CuratalIT's source, it's the one role
+// accepted by both accounts_service's isrecruiterAuthorized()
 // (LOOKUP/ADD/MISSING_LINKEDIN_PATH below) and pca_service's
 // isPcaAndPlatformAdminAuthorized()/canAccessCandidateProfile()
 // (PCA_*_PATH below, which writes the backfill's resolved LinkedIn URL
 // back onto the candidate's own profile).
-const API_HOST = 'https://curatal-dev.openturf.dev';
+const API_HOST = 'https://staging.curatal.com';
 // Login goes through the separate recruiter_service (confirmed live: its
 // validation error names /home/ubuntu/curatal_backend/recruiter_service/...),
 // not the candidate-oriented accounts_service _login this used before --
@@ -22,31 +22,38 @@ const API_HOST = 'https://curatal-dev.openturf.dev';
 // Platform Admin account logs in here too, same endpoint.
 const LOGIN_PATH = '/api/v1/recruiter/login';
 const REFRESH_TOKEN_PATH = '/api/v1/refresh-token';
-// These three are business logic that only exists in accounts_service
-// (linkedinSourcedDB.service.js) -- reaching it requires the
-// /curatal_account prefix. Confirmed live, repeatedly: the unprefixed
-// /api/v1/accounts/... form gets a generic, header-thin 401 with an empty
-// body and none of accounts_service's actual security/rate-limit headers,
-// while this prefixed form gets the real { code: 'UN_AUTHORIZED', ... }
-// response with the full header set -- the unprefixed form isn't reaching
-// this service at all.
-const LOOKUP_PATH = '/curatal_account/api/v1/accounts/candidate/sourced/lookup';
-const ADD_PATH = '/curatal_account/api/v1/accounts/candidate/sourced';
-const MISSING_LINKEDIN_PATH = '/curatal_account/api/v1/accounts/candidate/sourced/missing-linkedin';
+// The extension goes through the KrakenD gateway now, not accounts_service's
+// own /curatal_account prefix (per the team's routing table: KrakenD's
+// external path for these three is bare /api/v1/..., which it forwards
+// internally as backend path /v1/accounts/candidate/sourced/...). Confirmed
+// live on staging.curatal.com -- a real 401 across GET/POST with no body/
+// rate-limit headers, consistent with KrakenD doing its own JWT check before
+// forwarding to accounts_service (an earlier 502 Bad Gateway on this same
+// path family, before the KrakenD side came up, is gone as of this check).
+const LOOKUP_PATH = '/api/v1/accounts/candidate/sourced/lookup';
+const ADD_PATH = '/api/v1/accounts/candidate/sourced';
+const MISSING_LINKEDIN_PATH = '/api/v1/accounts/candidate/sourced/missing-linkedin';
 
 // Writes the bulk-backfill crawl's resolved LinkedIn URL back onto the
 // candidate's own Curatal profile (Social Media Links section) -- a
-// completely different backend service (pca_service, external gateway
-// prefix /curatal_pca) from the three paths above (accounts_service,
-// /curatal_account). Confirmed live against pca_service's own source
-// (routes/v1/pca.route.js: POST /getProfile/byEmail, PATCH
-// /updateProfile/:candidateId). Both require the logged-in account's JWT
-// to carry a PCA Admin/PCA Agent/Platform Admin realm role -- a plain
-// Recruiter login can't call these. isrecruiterAuthorized() on the three
-// accounts_service paths above accepts Platform Admin too, so logging in
-// as Platform Admin (not Recruiter) covers everything with one login.
-const PCA_GET_PROFILE_BY_EMAIL_PATH = '/curatal_pca/api/v1/pca/getProfile/byEmail';
-const PCA_UPDATE_PROFILE_PATH = '/curatal_pca/api/v1/pca/updateProfile';
+// completely different backend service (pca_service) from the three paths
+// above (accounts_service). On Curatal Dev this went through pca_service's
+// own gateway prefix (/curatal_pca/api/v1/pca/getProfile/byEmail,
+// PATCH .../updateProfile/:candidateId) -- staging goes through KrakenD
+// instead, at different paths, confirmed live by driving the actual PCA
+// Admin UI (staging.curatal.com/app/pca_admin/search-candidates ->
+// Profile Information -> Save) and reading the real requests it made
+// (performance.getEntriesByType('resource'), since neither was a plain
+// 401/400 to eyeball): POST /api/v1/pca/profile/byEmail, PATCH
+// /api/v1/pca/update/profile/:candidateId -- same shape as the portal
+// frontend's own ApiUrls.js (pcaGetProfileByEmail, pcaCandidateProfileUpdate).
+// Both endpoints require the logged-in account's JWT to carry a PCA Admin/
+// PCA Agent/Platform Admin realm role -- a plain Recruiter login can't call
+// these. isrecruiterAuthorized() on the three accounts_service paths above
+// accepts Platform Admin too, so logging in as Platform Admin (not
+// Recruiter) covers everything with one login.
+const PCA_GET_PROFILE_BY_EMAIL_PATH = '/api/v1/pca/profile/byEmail';
+const PCA_UPDATE_PROFILE_PATH = '/api/v1/pca/update/profile';
 
 const ACCESS_TOKEN_KEY = 'curatal_access_token';
 const REFRESH_TOKEN_KEY = 'curatal_refresh_token';
