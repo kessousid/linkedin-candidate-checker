@@ -1034,7 +1034,7 @@ async function processCandidate(tab, candidate) {
     // exact-token, not fuzzy, so no amount of rephrasing the rest of the
     // query fixes that. One more attempt, first name only plus whatever
     // company/education signal narrows it.
-    if (!nameMatches.length) {
+    if (!nameMatches.length && !bulkState.stopRequested) {
       const fallbackKeywords = buildFirstNameFallbackKeywords(candidate);
       if (fallbackKeywords) {
         await sleep(1500 + Math.random() * 1000);
@@ -1141,9 +1141,18 @@ async function recheckUnresolved() {
 // candidates left (the whole list has been swept).
 async function runBulkBackfill({ limit }) {
   if (bulkState.running) return;
+  // Claimed synchronously, before any await below -- checkAndRecordBulkRateLimit()
+  // and getBulkCursor() both hit chrome.storage, which yields to the event
+  // loop. Without claiming it here, a second START_BULK_BACKFILL arriving in
+  // that window would also pass the guard above (bulkState.running was still
+  // false) and, once it reached the reassignment below, overwrite bulkState
+  // with a fresh stopRequested:false -- silently reviving a crawl that had
+  // just been told to stop.
+  bulkState.running = true;
 
   const rateLimitError = await checkAndRecordBulkRateLimit();
   if (rateLimitError) {
+    bulkState.running = false;
     bulkState.lastError = rateLimitError;
     broadcastBulkProgress();
     return;
@@ -1250,7 +1259,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return false;
   }
   if (message.type === 'STOP_BULK_BACKFILL') {
+    // stopRequested is only polled at loop-iteration boundaries (between
+    // candidates, between profile-visit batches), not inside each visit's
+    // await -- honoring it can take up to one full candidate's worth of
+    // LinkedIn navigation. Broadcasting right away, before that, is what
+    // lets the page show "stopping" instead of looking like the click did
+    // nothing until the in-flight candidate finally finishes.
     bulkState.stopRequested = true;
+    broadcastBulkProgress();
     sendResponse({ ok: true });
     return false;
   }

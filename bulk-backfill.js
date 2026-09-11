@@ -4,11 +4,11 @@ function el(id) {
 
 function renderState(state) {
   const {
-    candidates, running, processedCount, total, cursor,
+    candidates, running, processedCount, total, cursor, stopRequested,
     autoContinue, batchesRun, totalMatched, totalNoMatch, totalErrors, sweepComplete, lastError,
   } = state;
   el('startBtn').disabled = running;
-  el('stopBtn').disabled = !running;
+  el('stopBtn').disabled = !running || stopRequested;
   el('limitInput').disabled = running;
   el('resetCursorBtn').disabled = running;
   el('modeManual').disabled = running;
@@ -24,6 +24,8 @@ function renderState(state) {
       el('progressText').textContent = lastError;
     } else if (lastError && !running) {
       el('progressText').textContent = `Couldn't fetch candidates from Curatal: ${lastError}. Check you're logged in (Settings) and try Start again.`;
+    } else if (running && stopRequested) {
+      el('progressText').textContent = 'Stopping — finishing the candidate currently in progress, then will halt (can take a minute or so, not stuck)…';
     } else {
       el('progressText').textContent = running ? 'Fetching candidates…' : 'Not started yet.';
     }
@@ -39,8 +41,10 @@ function renderState(state) {
     ? ` — running total across ${batchesRun || 1} batch(es): ${totalMatched || 0} matched, ${totalNoMatch || 0} no confident match, ${totalErrors || 0} errors`
     : '';
 
+  const stoppingPrefix = running && stopRequested ? 'Stopping (finishing current candidate, can take a minute)… ' : '';
+
   el('progressText').textContent = running
-    ? `Batch ${batchesRun || 1}: processing ${processedCount} of ${total}… (${batchMatched} matched, ${batchNoMatch} no confident match, ${batchErrors} errors so far this batch)${overallSuffix}`
+    ? `${stoppingPrefix}Batch ${batchesRun || 1}: processing ${processedCount} of ${total}… (${batchMatched} matched, ${batchNoMatch} no confident match, ${batchErrors} errors so far this batch)${overallSuffix}`
     : `Batch ${batchesRun || 1} done: ${processedCount} of ${total} processed (${batchMatched} matched, ${batchNoMatch} no confident match, ${batchErrors} errors)${overallSuffix}.`;
 
   el('resultsTable').style.display = '';
